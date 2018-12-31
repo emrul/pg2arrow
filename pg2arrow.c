@@ -358,7 +358,7 @@ int main(int argc, char * const argv[])
 {
 	PGconn	   *conn;
 	PGresult   *res;
-	sql_table  *table = NULL;
+	SQLtable   *table = NULL;
 
 	parse_options(argc, argv);
 	/* open PostgreSQL connection */

@@ -35,17 +35,82 @@ pg_strtochar(const char *v)
 	return *v;
 }
 
-static sql_table *pgsql_create_composite_type(PGconn *conn,
-											  Oid comptype_relid);
-static sql_attribute *pgsql_create_array_element(PGconn *conn,
-												 Oid array_elemid);
+static SQLtable *pgsql_create_composite_type(PGconn *conn,
+											 Oid comptype_relid);
+static SQLattribute *pgsql_create_array_element(PGconn *conn,
+												Oid array_elemid);
+
+/*
+ * pgsql_type_to_garrow_data_type
+ */
+static GArrowType
+pgsql_type_to_garrow_data_type(SQLattribute *attr,
+							   const char *nspname,
+							   const char *typname)
+{
+	if (attr->subtypes)
+		return GARROW_TYPE_STRUCT;
+	if (attr->elemtype)
+		return GARROW_TYPE_LIST;
+
+	/* built-in data type? */
+	if (strcmp(nspname, "pg_catalog") == 0)
+	{
+		if (strcmp(typname, "bool") == 0)
+			return GARROW_TYPE_BOOLEAN;
+		else if (strcmp(typname, "int2") == 0)
+			return GARROW_TYPE_INT16;
+		else if (strcmp(typname, "int4") == 0)
+			return GARROW_TYPE_INT32;
+		else if (strcmp(typname, "int8") == 0)
+			return GARROW_TYPE_INT64;
+		//else if (strcmp(typname, "float2") == 0)
+		//	return GARROW_TYPE_HALF_FLOAT;
+		else if (strcmp(typname, "float4") == 0)
+			return GARROW_TYPE_FLOAT;
+		else if (strcmp(typname, "float8") == 0)
+			return GARROW_TYPE_DOUBLE;
+		else if (strcmp(typname, "text") == 0 ||
+				 strcmp(typname, "varchar") == 0 ||
+				 strcmp(typname, "bpchar") == 0)
+			return GARROW_TYPE_STRING;
+		else if (strcmp(typname, "numeric") == 0 &&
+				 attr->atttypmod >= VARHDRSZ)
+		{
+			/*
+			 * Memo: the upper 16bit of (typmod - VARHDRSZ) is precision,
+			 * the lower 16bit is scale of the numeric data type.
+			 */
+			return GARROW_TYPE_DECIMAL;
+		}
+	}
+
+	if (attr->attlen > 0)
+	{
+		if (attr->attlen == sizeof(uchar))
+			return GARROW_TYPE_UINT8;
+		else if (attr->attlen == sizeof(ushort))
+			return GARROW_TYPE_UINT16;
+		else if (attr->attlen == sizeof(uint))
+			return GARROW_TYPE_UINT32;
+		else if (attr->attlen == sizeof(ulong))
+			return GARROW_TYPE_UINT64;
+		else
+			return GARROW_TYPE_BINARY;
+	}
+	else if (attr->attlen == -1)
+		return GARROW_TYPE_BINARY;
+	else
+		Elog("cannot handle PG data type '%s'", typname);
+	return GARROW_TYPE_NA;	/* for compiler quiet */
+}
 
 /*
  * pgsql_setup_attribute
  */
 static void
 pgsql_setup_attribute(PGconn *conn,
-					  sql_attribute *attr,
+					  SQLattribute *attr,
 					  const char *attname,
 					  Oid atttypid,
 					  int atttypmod,
@@ -54,7 +119,9 @@ pgsql_setup_attribute(PGconn *conn,
 					  char attalign,
 					  char typtype,
 					  Oid comp_typrelid,
-					  Oid array_elemid)
+					  Oid array_elemid,
+					  const char *nspname,
+					  const char *typname)
 {
 	attr->attname   = pg_strdup(attname);
 	attr->atttypid  = atttypid;
@@ -99,24 +166,31 @@ pgsql_setup_attribute(PGconn *conn,
 	else
 		Elog("unknown state pf typtype: %c", typtype);
 
+	attr->garrow_type = pgsql_type_to_garrow_data_type(attr,
+													   nspname,
+													   typname);
 }
 
 /*
  * pgsql_create_composite_type
  */
-static sql_table *
+static SQLtable *
 pgsql_create_composite_type(PGconn *conn, Oid comptype_relid)
 {
 	PGresult   *res;
-	sql_table  *table;
+	SQLtable   *table;
 	char		query[4096];
 	int			j, nfields;
 
 	snprintf(query, sizeof(query),
 			 "SELECT attname, attnum, atttypid, atttypmod, attlen,"
-			 "       attbyval, attalign, typtype, typrelid, typelem"
-			 "  FROM pg_catalog.pg_attribute a, pg_catalog.pg_type t"
-			 " WHERE a.atttypid = t.oid"
+			 "       attbyval, attalign, typtype, typrelid, typelem,"
+			 "       nspname, typname"
+			 "  FROM pg_catalog.pg_attribute a,"
+			 "       pg_catalog.pg_type t,"
+			 "       pg_catalog.pg_namespace n"
+			 " WHERE t.typnamespace = n.oid"
+			 "   AND a.atttypid = t.oid"
 			 "   AND a.attrelid = %u", comptype_relid);
 	res = PQexec(conn, query);
 	if (PQresultStatus(res) != PGRES_TUPLES_OK)
@@ -124,7 +198,7 @@ pgsql_create_composite_type(PGconn *conn, Oid comptype_relid)
 			 PQresultErrorMessage(res));
 
 	nfields = PQntuples(res);
-	table = pg_zalloc(offsetof(sql_table, attrs[nfields]));
+	table = pg_zalloc(offsetof(SQLtable, attrs[nfields]));
 	table->nfields = nfields;
 	for (j=0; j < nfields; j++)
 	{
@@ -138,6 +212,8 @@ pgsql_create_composite_type(PGconn *conn, Oid comptype_relid)
 		const char *typtype   = PQgetvalue(res, j, 7);
 		const char *typrelid  = PQgetvalue(res, j, 8);
 		const char *typelem   = PQgetvalue(res, j, 9);
+		const char *nspname   = PQgetvalue(res, j, 10);
+		const char *typname   = PQgetvalue(res, j, 11);
 		int			index     = atoi(attnum);
 
 		if (index < 1 || index > nfields)
@@ -152,17 +228,19 @@ pgsql_create_composite_type(PGconn *conn, Oid comptype_relid)
 							  pg_strtochar(attalign),
 							  pg_strtochar(typtype),
 							  atooid(typrelid),
-							  atooid(typelem));
+							  atooid(typelem),
+							  nspname, typname);
 	}
 	return table;
 }
 
-static sql_attribute *
+static SQLattribute *
 pgsql_create_array_element(PGconn *conn, Oid array_elemid)
 {
-	sql_attribute  *attr = pg_zalloc(sizeof(sql_attribute));
+	SQLattribute   *attr = pg_zalloc(sizeof(SQLattribute));
 	PGresult	   *res;
 	char			query[4096];
+	const char     *nspname;
 	const char	   *typname;
 	const char	   *typlen;
 	const char	   *typbyval;
@@ -172,24 +250,27 @@ pgsql_create_array_element(PGconn *conn, Oid array_elemid)
 	const char	   *typelem;
 
 	snprintf(query, sizeof(query),
-			 "SELECT typname, typlen, typbyval, typalign, typtype,"
-			 "       typrelid, typelem"
-			 "  FROM pg_catalog.pg_type t"
-			 " WHERE t.oid = %u", array_elemid);
+			 "SELECT nspname, typname,"
+			 "       typlen, typbyval, typalign, typtype,"
+			 "       typrelid, typelem,"
+			 "  FROM pg_catalog.pg_type t,"
+			 "       pg_catalog.pg_namespace n"
+			 " WHERE t.typnamespace = n.oid"
+			 "   AND t.oid = %u", array_elemid);
 	res = PQexec(conn, query);
 	if (PQresultStatus(res) != PGRES_TUPLES_OK)
 		Elog("failed on pg_type system catalog query: %s",
 			 PQresultErrorMessage(res));
 	if (PQntuples(res) != 1)
 		Elog("unexpected number of result rows: %d", PQntuples(res));
-
-	typname  = PQgetvalue(res, 0, 0);
-	typlen   = PQgetvalue(res, 0, 1);
-	typbyval = PQgetvalue(res, 0, 2);
-	typalign = PQgetvalue(res, 0, 3);
-	typtype  = PQgetvalue(res, 0, 4);
-	typrelid = PQgetvalue(res, 0, 5);
-	typelem  = PQgetvalue(res, 0, 6);
+	nspname  = PQgetvalue(res, 0, 0);
+	typname  = PQgetvalue(res, 0, 1);
+	typlen   = PQgetvalue(res, 0, 2);
+	typbyval = PQgetvalue(res, 0, 3);
+	typalign = PQgetvalue(res, 0, 4);
+	typtype  = PQgetvalue(res, 0, 5);
+	typrelid = PQgetvalue(res, 0, 6);
+	typelem  = PQgetvalue(res, 0, 7);
 
 	pgsql_setup_attribute(conn,
 						  attr,
@@ -201,20 +282,22 @@ pgsql_create_array_element(PGconn *conn, Oid array_elemid)
 						  pg_strtochar(typalign),
 						  pg_strtochar(typtype),
 						  atooid(typrelid),
-						  atooid(typelem));
+						  atooid(typelem),
+						  nspname,
+						  typname);
 	return attr;
 }
 
 /*
  * pgsql_create_buffer
  */
-sql_table *
+SQLtable *
 pgsql_create_buffer(PGconn *conn, PGresult *res)
 {
 	int			j, nfields = PQnfields(res);
-	sql_table  *table;
+	SQLtable   *table;
 
-	table = pg_zalloc(offsetof(sql_table, attrs[nfields]));
+	table = pg_zalloc(offsetof(SQLtable, attrs[nfields]));
 	table->nfields = nfields;
 	for (j=0; j < nfields; j++)
 	{
@@ -229,12 +312,16 @@ pgsql_create_buffer(PGconn *conn, PGresult *res)
 		const char *typtype;
 		const char *typrelid;
 		const char *typelem;
+		const char *nspname;
+		const char *typname;
 
 		snprintf(query, sizeof(query),
-				 "SELECT typlen, typbyval, typalign, typtype, "
-				 "       typrelid, typelem"
-				 "  FROM pg_catalog.pg_type t"
-				 " WHERE t.oid = %u", atttypid);
+				 "SELECT typlen, typbyval, typalign, typtype,"
+				 "       typrelid, typelem, nspname, typname"
+				 "  FROM pg_catalog.pg_type t,"
+				 "       pg_catalog.pg_namespace n"
+				 " WHERE t.typnamespace = n.oid"
+				 "   AND t.oid = %u", atttypid);
 		__res = PQexec(conn, query);
 		if (PQresultStatus(__res) != PGRES_TUPLES_OK)
 			Elog("failed on pg_type system catalog query: %s",
@@ -247,6 +334,8 @@ pgsql_create_buffer(PGconn *conn, PGresult *res)
 		typtype  = PQgetvalue(__res, 0, 3);
 		typrelid = PQgetvalue(__res, 0, 4);
 		typelem  = PQgetvalue(__res, 0, 5);
+		nspname  = PQgetvalue(__res, 0, 6);
+		typname  = PQgetvalue(__res, 0, 7);
 		pgsql_setup_attribute(conn,
 							  &table->attrs[j],
                               attname,
@@ -257,7 +346,8 @@ pgsql_create_buffer(PGconn *conn, PGresult *res)
 							  *typalign,
 							  *typtype,
 							  atoi(typrelid),
-							  atoi(typelem));
+							  atoi(typelem),
+							  nspname, typname);
 		PQclear(__res);
 	}
 	return table;
@@ -267,17 +357,49 @@ pgsql_create_buffer(PGconn *conn, PGresult *res)
  * pgsql_dump_attribute
  */
 static void
-pgsql_dump_attribute(sql_attribute *attr, const char *label, int indent)
+pgsql_dump_attribute(SQLattribute *attr, const char *label, int indent)
 {
+	const char *garrow_type;
 	int		j;
+
+	switch (attr->garrow_type)
+	{
+		case GARROW_TYPE_BOOLEAN:    garrow_type = "boolean";    break;
+		case GARROW_TYPE_UINT8:      garrow_type = "uint8";      break;
+		case GARROW_TYPE_INT8:       garrow_type = "int8";       break;
+		case GARROW_TYPE_UINT16:     garrow_type = "uint16";     break;
+		case GARROW_TYPE_INT16:      garrow_type = "int16";      break;
+		case GARROW_TYPE_UINT32:     garrow_type = "uint32";     break;
+		case GARROW_TYPE_INT32:      garrow_type = "int32";      break;
+		case GARROW_TYPE_UINT64:     garrow_type = "uint64";     break;
+		case GARROW_TYPE_INT64:      garrow_type = "int64";      break;
+		case GARROW_TYPE_HALF_FLOAT: garrow_type = "float2";     break;
+		case GARROW_TYPE_FLOAT:      garrow_type = "float4";     break;
+		case GARROW_TYPE_DOUBLE:     garrow_type = "float8";     break;
+		case GARROW_TYPE_STRING:     garrow_type = "string";     break;
+		case GARROW_TYPE_BINARY:     garrow_type = "binary";     break;
+		case GARROW_TYPE_DATE32:     garrow_type = "date32";     break;
+		case GARROW_TYPE_DATE64:     garrow_type = "date64";     break;
+		case GARROW_TYPE_TIMESTAMP:  garrow_type = "timestamp";  break;
+		case GARROW_TYPE_TIME32:     garrow_type = "time32";     break;
+		case GARROW_TYPE_TIME64:     garrow_type = "time64";     break;
+		case GARROW_TYPE_INTERVAL:   garrow_type = "interval";   break;
+		case GARROW_TYPE_DECIMAL:    garrow_type = "decimal";    break;
+		case GARROW_TYPE_LIST:       garrow_type = "list";       break;
+		case GARROW_TYPE_STRUCT:     garrow_type = "struct";     break;
+		case GARROW_TYPE_UNION:      garrow_type = "union";      break;
+		case GARROW_TYPE_DICTIONARY: garrow_type = "dictionary"; break;
+		default:   garrow_type = "unknown"; break;
+	}
 
 	for (j=0; j < indent; j++)
 		putchar(' ');
 	printf("%s {attname='%s', atttypid=%u, atttypmod=%d, attlen=%d,"
-		   " attbyval=%s, attalign=%d, typtype=%c}\n",
+		   " attbyval=%s, attalign=%d, typtype=%c, arrow(%s)}\n",
 		   label,
 		   attr->attname, attr->atttypid, attr->atttypmod, attr->attlen,
-		   attr->attbyval ? "true" : "false", attr->attalign, attr->typtype);
+		   attr->attbyval ? "true" : "false", attr->attalign, attr->typtype,
+		   garrow_type);
 	if (attr->typtype == 'b')
 	{
 		if (attr->elemtype)
@@ -285,7 +407,7 @@ pgsql_dump_attribute(sql_attribute *attr, const char *label, int indent)
 	}
 	else if (attr->typtype == 'c')
 	{
-		sql_table  *subtypes = attr->subtypes;
+		SQLtable   *subtypes = attr->subtypes;
 		char		label[64];
 
 		for (j=0; j < subtypes->nfields; j++)
@@ -300,7 +422,7 @@ pgsql_dump_attribute(sql_attribute *attr, const char *label, int indent)
  * pgsql_dump_buffer
  */
 void
-pgsql_dump_buffer(sql_table *table)
+pgsql_dump_buffer(SQLtable *table)
 {
 	int		j;
 	char	label[64];
