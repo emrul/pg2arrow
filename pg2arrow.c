@@ -190,7 +190,8 @@ parse_options(int argc, char * const argv[])
 	}
 	else if (optind != argc)
 		Elog("Too much command line arguments");
-
+	if (batch_segment_sz == 0 && batch_num_rows == 0)
+		batch_segment_sz = (1UL << 29);		/* 512MB in default */
 	if (!output_filename)
 		Elog("-o, --output=FILENAME option is missing");
 	if (sql_file)
@@ -367,47 +368,19 @@ int main(int argc, char * const argv[])
 	res = pgsql_begin_query(conn, sql_command);
 	if (!res)
 		Elog("SQL command returned an empty result");
-	table = pgsql_create_buffer(conn, res);
+	table = pgsql_create_buffer(conn, res,
+								batch_segment_sz,
+								batch_num_rows);
 	do {
-
-		printf("%d rows\n", PQntuples(res));
-
-
+		pgsql_append_results(table, res);
 		PQclear(res);
 		res = pgsql_next_result(conn);
 	} while (res != NULL);
 	pgsql_end_query(conn);
+	if (table->nitems > 0)
+		pgsql_writeout_buffer(table);
 
-	pgsql_dump_buffer(table);
-	
-
-	/* run SQL command on the connection*/
-
-	printf("sql_command = '%s'\n"
-		   "output_filename = '%s'\n"
-		   "batch_segment_sz = %zu\n"
-		   "batch_num_rows = %zu\n"
-		   "dictionary_compression = %d\n"
-		   "pgsql_hostname = %s\n"
-		   "pgsql_portno = %s\n"
-		   "pgsql_username = %s\n"
-		   "pgsql_database = %s\n"
-		   "pgsql_password_prompt = %d\n",
-		   sql_command,
-		   output_filename,
-		   batch_segment_sz,
-		   batch_num_rows,
-		   dictionary_compression,
-		   pgsql_hostname,
-		   pgsql_portno,
-		   pgsql_username,
-		   pgsql_database,
-		   pgsql_password_prompt);
-
-
-
-
-
+	//pgsql_dump_buffer(table);
 	return 0;
 }
 

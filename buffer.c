@@ -35,45 +35,296 @@ pg_strtochar(const char *v)
 	return *v;
 }
 
+/*
+ * SQLbuffer related routines
+ */
+static inline void
+sql_buffer_init(SQLbuffer *buf)
+{
+	buf->ptr = NULL;
+	buf->usage = 0;
+	buf->length = 0;
+}
+
+static void
+sql_buffer_expand(SQLbuffer *buf, size_t required)
+{
+	if (buf->length < required)
+	{
+		void	   *ptr;
+		size_t		length;
+
+		if (buf->ptr == NULL)
+		{
+			length = (1UL << 21);	/* start from 2MB */
+			while (length < required)
+				length *= 2;
+			ptr = mmap(NULL, length, PROT_READ | PROT_WRITE,
+					   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+			if (ptr == MAP_FAILED)
+				Elog("failed on mmap(len=%zu): %m", length);
+			buf->ptr    = ptr;
+			buf->usage  = 0;
+			buf->length = length;
+		}
+		else
+		{
+			length = 2 * buf->length;
+			while (length < required)
+				length *= 2;
+			ptr = mremap(buf->ptr, buf->length, length, MREMAP_MAYMOVE);
+			if (ptr == MAP_FAILED)
+				Elog("failed on mremap(len=%zu): %m", length);
+			buf->ptr    = ptr;
+			buf->length = length;
+		}
+	}
+}
+
+static inline void
+sql_buffer_append(SQLbuffer *buf, const void *src, size_t len)
+{
+	sql_buffer_expand(buf, buf->usage + len);
+	memcpy(buf->ptr + buf->usage, src, len);
+	buf->usage += len;
+	assert(buf->usage <= buf->length);
+}
+
+static inline void
+sql_buffer_append_zero(SQLbuffer *buf, size_t len)
+{
+	sql_buffer_expand(buf, buf->usage + len);
+	memset(buf->ptr + buf->usage, 0, len);
+	buf->usage += len;
+	assert(buf->usage <= buf->length);
+}
+
+static inline void
+sql_buffer_setbit(SQLbuffer *buf, size_t index)
+{
+	size_t		required = BITMAPLEN(index+1);
+	sql_buffer_expand(buf, required);
+	((uchar *)buf->ptr)[index>>3] |= (1 << (index & 7));
+}
+
+static inline void
+sql_buffer_clrbit(SQLbuffer *buf, size_t index)
+{
+	size_t		required = BITMAPLEN(index+1);
+	sql_buffer_expand(buf, required);
+	((uchar *)buf->ptr)[index>>3] &= ~(1 << (index & 7));
+}
+
+static inline void
+sql_buffer_clear(SQLbuffer *buf)
+{
+	buf->usage = 0;
+}
+
+/*
+ * type handlers for each Arrow type
+ */
+static size_t
+put_inline_value(SQLattribute *attr, int row_index,
+				 const char *addr, int sz)
+{
+	size_t		usage;
+
+	if (!addr)
+	{
+		attr->nullcount++;
+		sql_buffer_clrbit(&attr->nullmap, row_index);
+		sql_buffer_append_zero(&attr->values, attr->attlen);
+	}
+	else
+	{
+		assert(attr->attlen == sz);
+		sql_buffer_setbit(&attr->nullmap, row_index);
+		sql_buffer_append(&attr->values, addr, sz);
+	}
+	usage = MAXALIGN(attr->values.usage);
+	if (attr->nullcount > 0)
+		usage += MAXALIGN(attr->nullmap.usage);
+	return usage;
+}
+
+static size_t
+put_decimal_value(SQLattribute *attr, int row_index,
+				  const char *addr, int sz)
+{
+	Elog("not supported now");
+	return 0;
+}
+
+static size_t
+put_variable_value(SQLattribute *attr, int row_index,
+				   const char *addr, int sz)
+{
+	size_t		usage;
+
+	if (row_index == 0)
+		sql_buffer_append_zero(&attr->values, sizeof(uint32));
+	if (!addr)
+	{
+		attr->nullcount++;
+		sql_buffer_clrbit(&attr->nullmap, row_index);
+		sql_buffer_append(&attr->values, &attr->extra.usage, sizeof(uint32));
+	}
+	else
+	{
+		assert(attr->attlen == -1 || attr->attlen == sz);
+		sql_buffer_setbit(&attr->nullmap, row_index);
+		sql_buffer_append(&attr->extra, addr, sz);
+		sql_buffer_append(&attr->values, &attr->extra.usage, sizeof(uint32));
+	}
+	usage = (MAXALIGN(attr->values.usage) +
+			 MAXALIGN(attr->extra.usage));
+	if (attr->nullcount > 0)
+		usage += MAXALIGN(attr->nullmap.usage);
+	return usage;
+}
+
+static size_t
+put_array_value(SQLattribute *attr, int row_index,
+				const char *addr, int sz)
+{
+	Elog("not supported now");
+	return 0;
+}
+
+static size_t
+put_composite_value(SQLattribute *attr, int row_index,
+					const char *addr, int sz)
+{
+	/* see record_send() */
+	SQLtable   *subtypes = attr->subtypes;
+	size_t		usage = 0;
+	int			j, nvalids;
+
+	if (!addr)
+	{
+		attr->nullcount++;
+		sql_buffer_clrbit(&attr->nullmap, row_index);
+		usage += MAXALIGN(attr->nullmap.usage);
+		/* null for all the subtypes */
+		for (j=0; j < subtypes->nfields; j++)
+		{
+			SQLattribute *subattr = &subtypes->attrs[j];
+			usage += subattr->put_value(subattr, row_index, NULL, 0);
+		}
+	}
+	else
+	{
+		const char *pos = addr;
+
+		sql_buffer_setbit(&attr->nullmap, row_index);
+		if (sz < sizeof(uint32))
+			Elog("binary composite record corruption");
+		if (attr->nullcount > 0)
+			usage += MAXALIGN(attr->nullmap.usage);
+		nvalids = ntohl(*((const int *)pos));
+		pos += sizeof(int);
+		for (j=0; j < subtypes->nfields; j++)
+		{
+			SQLattribute *subattr = &subtypes->attrs[j];
+			Oid		atttypid;
+			int		attlen;
+
+			if (j >= nvalids)
+			{
+				usage += subattr->put_value(subattr, row_index, NULL, 0);
+				continue;
+			}
+			if ((pos - addr) + sizeof(Oid) + sizeof(int) > sz)
+				Elog("binary composite record corruption");
+			atttypid = ntohl(*((Oid *)pos));
+			pos += sizeof(Oid);
+			if (subattr->atttypid != atttypid)
+				Elog("composite subtype mismatch");
+			attlen = ntohl(*((int *)pos));
+			pos += sizeof(int);
+			if (attlen == -1)
+			{
+				usage += subattr->put_value(subattr, row_index, NULL, 0);
+			}
+			else
+			{
+				if ((pos - addr) + attlen > sz)
+					Elog("binary composite record corruption");
+				usage += subattr->put_value(subattr, row_index, pos, attlen);
+				pos += attlen;
+			}
+		}
+	}
+	return usage;
+}
+
 static SQLtable *pgsql_create_composite_type(PGconn *conn,
 											 Oid comptype_relid);
 static SQLattribute *pgsql_create_array_element(PGconn *conn,
 												Oid array_elemid);
 
 /*
- * pgsql_type_to_garrow_data_type
+ * attribute_assign_type_handler
  */
-static GArrowType
-pgsql_type_to_garrow_data_type(SQLattribute *attr,
-							   const char *nspname,
-							   const char *typname)
+static void
+attribute_assign_type_handler(SQLattribute *attr,
+							  const char *nspname,
+							  const char *typname)
 {
 	if (attr->subtypes)
-		return GARROW_TYPE_STRUCT;
-	if (attr->elemtype)
-		return GARROW_TYPE_LIST;
-
-	/* built-in data type? */
-	if (strcmp(nspname, "pg_catalog") == 0)
 	{
+		/* composite type */
+		attr->garrow_type = GARROW_TYPE_STRUCT;
+		attr->put_value = put_composite_value;
+	}
+	else if (attr->elemtype)
+	{
+		/* array type */
+		attr->garrow_type = GARROW_TYPE_LIST;
+		attr->put_value = put_array_value;
+	}
+	else if (strcmp(nspname, "pg_catalog") == 0)
+	{
+		/* built-in data type? */
 		if (strcmp(typname, "bool") == 0)
-			return GARROW_TYPE_BOOLEAN;
+		{
+			attr->garrow_type = GARROW_TYPE_BOOLEAN;
+			attr->put_value = put_inline_value;
+			return;
+		}
 		else if (strcmp(typname, "int2") == 0)
-			return GARROW_TYPE_INT16;
+		{
+			attr->garrow_type = GARROW_TYPE_INT16;
+			attr->put_value = put_inline_value;
+		}
 		else if (strcmp(typname, "int4") == 0)
-			return GARROW_TYPE_INT32;
+		{
+			attr->garrow_type = GARROW_TYPE_INT32;
+			attr->put_value = put_inline_value;
+		}
 		else if (strcmp(typname, "int8") == 0)
-			return GARROW_TYPE_INT64;
-		//else if (strcmp(typname, "float2") == 0)
-		//	return GARROW_TYPE_HALF_FLOAT;
+		{
+			attr->garrow_type = GARROW_TYPE_INT64;
+			attr->put_value = put_inline_value;
+		}
 		else if (strcmp(typname, "float4") == 0)
-			return GARROW_TYPE_FLOAT;
+		{
+			attr->garrow_type = GARROW_TYPE_FLOAT;
+			attr->put_value = put_inline_value;
+		}
 		else if (strcmp(typname, "float8") == 0)
-			return GARROW_TYPE_DOUBLE;
+		{
+			 attr->garrow_type = GARROW_TYPE_DOUBLE;
+			 attr->put_value = put_inline_value;
+		}
 		else if (strcmp(typname, "text") == 0 ||
 				 strcmp(typname, "varchar") == 0 ||
 				 strcmp(typname, "bpchar") == 0)
-			return GARROW_TYPE_STRING;
+		{
+			attr->garrow_type = GARROW_TYPE_STRING;
+			attr->put_value = put_variable_value;
+		}
 		else if (strcmp(typname, "numeric") == 0 &&
 				 attr->atttypmod >= VARHDRSZ)
 		{
@@ -81,28 +332,48 @@ pgsql_type_to_garrow_data_type(SQLattribute *attr,
 			 * Memo: the upper 16bit of (typmod - VARHDRSZ) is precision,
 			 * the lower 16bit is scale of the numeric data type.
 			 */
-			return GARROW_TYPE_DECIMAL;
+			attr->garrow_type = GARROW_TYPE_DECIMAL;
+			attr->put_value = put_decimal_value;
 		}
 	}
-
+	if (attr->put_value != NULL)
+		return;
+	/* elsewhere, use generic copy function */
 	if (attr->attlen > 0)
 	{
 		if (attr->attlen == sizeof(uchar))
-			return GARROW_TYPE_UINT8;
+		{
+			attr->garrow_type = GARROW_TYPE_UINT8;
+			attr->put_value = put_inline_value;
+		}
 		else if (attr->attlen == sizeof(ushort))
-			return GARROW_TYPE_UINT16;
+		{
+			attr->garrow_type = GARROW_TYPE_UINT16;
+			attr->put_value = put_inline_value;
+		}
 		else if (attr->attlen == sizeof(uint))
-			return GARROW_TYPE_UINT32;
+		{
+			attr->garrow_type = GARROW_TYPE_UINT32;
+			attr->put_value = put_inline_value;
+		}
 		else if (attr->attlen == sizeof(ulong))
-			return GARROW_TYPE_UINT64;
+		{
+			attr->garrow_type = GARROW_TYPE_UINT64;
+			attr->put_value = put_inline_value;
+		}
 		else
-			return GARROW_TYPE_BINARY;
+		{
+			attr->garrow_type = GARROW_TYPE_BINARY;
+			attr->put_value = put_inline_value;
+		}
 	}
 	else if (attr->attlen == -1)
-		return GARROW_TYPE_BINARY;
+	{
+		attr->garrow_type = GARROW_TYPE_BINARY;
+		attr->put_value = put_variable_value;
+	}
 	else
 		Elog("cannot handle PG data type '%s'", typname);
-	return GARROW_TYPE_NA;	/* for compiler quiet */
 }
 
 /*
@@ -166,9 +437,7 @@ pgsql_setup_attribute(PGconn *conn,
 	else
 		Elog("unknown state pf typtype: %c", typtype);
 
-	attr->garrow_type = pgsql_type_to_garrow_data_type(attr,
-													   nspname,
-													   typname);
+	attribute_assign_type_handler(attr, nspname, typname);
 }
 
 /*
@@ -288,16 +557,21 @@ pgsql_create_array_element(PGconn *conn, Oid array_elemid)
 	return attr;
 }
 
+
 /*
  * pgsql_create_buffer
  */
 SQLtable *
-pgsql_create_buffer(PGconn *conn, PGresult *res)
+pgsql_create_buffer(PGconn *conn, PGresult *res,
+					size_t segment_sz, size_t nrooms)
 {
 	int			j, nfields = PQnfields(res);
 	SQLtable   *table;
 
 	table = pg_zalloc(offsetof(SQLtable, attrs[nfields]));
+	table->segment_sz = segment_sz;
+	table->nrooms = nrooms;
+	table->nitems = 0;
 	table->nfields = nfields;
 	for (j=0; j < nfields; j++)
 	{
@@ -351,6 +625,100 @@ pgsql_create_buffer(PGconn *conn, PGresult *res)
 		PQclear(__res);
 	}
 	return table;
+}
+
+/*
+ * pgsql_clear_attribute
+ */
+static void
+pgsql_clear_attribute(SQLattribute *attr)
+{
+	attr->nullcount = 0;
+	sql_buffer_clear(&attr->nullmap);
+	sql_buffer_clear(&attr->values);
+	sql_buffer_clear(&attr->extra);
+
+	if (attr->subtypes)
+	{
+		SQLtable   *subtypes = attr->subtypes;
+		int			j;
+
+		for (j=0; j < subtypes->nfields; j++)
+			pgsql_clear_attribute(&subtypes->attrs[j]);
+	}
+	if (attr->elemtype)
+		pgsql_clear_attribute(attr->elemtype);
+}
+
+/*
+ * pgsql_writeout_buffer
+ */
+void
+pgsql_writeout_buffer(SQLtable *table)
+{
+	int		j;
+
+	printf("writeout nitems=%zu\n", table->nitems);
+
+	/* makes table/attributes empty */
+	table->nitems = 0;
+	for (j=0; j < table->nfields; j++)
+		pgsql_clear_attribute(&table->attrs[j]);
+}
+
+/*
+ * pgsql_append_results
+ */
+void
+pgsql_append_results(SQLtable *table, PGresult *res)
+{
+	int		i, ntuples = PQntuples(res);
+	int		j, nfields = PQnfields(res);
+	size_t	usage;
+
+	assert(nfields == table->nfields);
+	for (i=0; i < ntuples; i++)
+	{
+	retry:
+		usage = 0;
+		for (j=0; j < nfields; j++)
+		{
+			SQLattribute   *attr = &table->attrs[j];
+			const char	   *addr;
+			size_t			sz;
+			/* data must be binary format */
+			assert(PQfformat(res, j) == 1);
+			if (PQgetisnull(res, i, j))
+			{
+				addr = NULL;
+				sz = 0;
+			}
+			else
+			{
+				addr = PQgetvalue(res, i, j);
+				sz = PQgetlength(res, i, j);
+			}
+			usage += attr->put_value(attr, table->nitems, addr, sz);
+		}
+		/* check threshold to write out */
+		if (table->nrooms > 0)
+		{
+			table->nitems++;
+			if (table->nitems >= table->nrooms)
+				pgsql_writeout_buffer(table);
+		}
+		else if (table->segment_sz > 0)
+		{
+			if (usage > table->segment_sz)
+			{
+				pgsql_writeout_buffer(table);
+				goto retry;
+			}
+			table->nitems++;
+		}
+		else
+			Elog("Bug? unexpected SQLtable state");
+	}
 }
 
 /*
