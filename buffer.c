@@ -125,8 +125,153 @@ sql_buffer_clear(SQLbuffer *buf)
  * type handlers for each Arrow type
  */
 static size_t
-put_inline_value(SQLattribute *attr, int row_index,
-				 const char *addr, int sz)
+put_inline_8b_value(SQLattribute *attr, int row_index,
+					const char *addr, int sz)
+{
+	size_t		usage;
+
+	assert(attr->attlen == sizeof(uint8));
+	if (!addr)
+	{
+		attr->nullcount++;
+		sql_buffer_clrbit(&attr->nullmap, row_index);
+		sql_buffer_append_zero(&attr->values, sizeof(char));
+	}
+	else
+	{
+		assert(sz == sizeof(uint8));
+		sql_buffer_setbit(&attr->nullmap, row_index);
+		sql_buffer_append(&attr->values, addr, sz);
+	}
+	usage = ARROWALIGN(attr->values.usage);
+	if (attr->nullcount > 0)
+		usage += ARROWALIGN(attr->nullmap.usage);
+	return usage;
+}
+
+static size_t
+put_inline_16b_value(SQLattribute *attr, int row_index,
+					 const char *addr, int sz)
+{
+	size_t		usage;
+	uint16		value;
+
+	assert(attr->attlen == sizeof(uint16));
+	if (!addr)
+	{
+		attr->nullcount++;
+		sql_buffer_clrbit(&attr->nullmap, row_index);
+		sql_buffer_append_zero(&attr->values, sizeof(uint16));
+	}
+	else
+	{
+		assert(sz == sizeof(uint16));
+		value = ntohs(*((const uint16 *)addr));
+		sql_buffer_setbit(&attr->nullmap, row_index);
+		sql_buffer_append(&attr->values, &value, sz);
+	}
+	usage = ARROWALIGN(attr->values.usage);
+	if (attr->nullcount > 0)
+		usage += ARROWALIGN(attr->nullmap.usage);
+	return usage;
+}
+
+static size_t
+put_inline_32b_value(SQLattribute *attr, int row_index,
+					 const char *addr, int sz)
+{
+	size_t		usage;
+	uint32		value;
+
+	assert(attr->attlen == sizeof(uint32));
+	if (!addr)
+	{
+		attr->nullcount++;
+		sql_buffer_clrbit(&attr->nullmap, row_index);
+		sql_buffer_append_zero(&attr->values, sizeof(uint32));
+	}
+	else
+	{
+		assert(sz == sizeof(uint32));
+		value = ntohl(*((const uint32 *)addr));
+		sql_buffer_setbit(&attr->nullmap, row_index);
+		sql_buffer_append(&attr->values, &value, sz);
+	}
+	usage = ARROWALIGN(attr->values.usage);
+	if (attr->nullcount > 0)
+		usage += ARROWALIGN(attr->nullmap.usage);
+	return usage;
+}
+
+static size_t
+put_inline_64b_value(SQLattribute *attr, int row_index,
+					 const char *addr, int sz)
+{
+	size_t		usage;
+	uint64		value;
+	uint32		h, l;
+
+	assert(attr->attlen == sizeof(uint64));
+	if (!addr)
+	{
+		attr->nullcount++;
+		sql_buffer_clrbit(&attr->nullmap, row_index);
+		sql_buffer_append_zero(&attr->values, sizeof(uint64));
+	}
+	else
+	{
+		assert(sz == sizeof(uint64));
+		h = ntohl(*((const uint32 *)(addr)));
+		l = ntohl(*((const uint32 *)(addr + sizeof(uint32))));
+		value = (uint64)h << 32 | (uint64)l;
+		sql_buffer_setbit(&attr->nullmap, row_index);
+		sql_buffer_append(&attr->values, &value, sz);
+	}
+	usage = ARROWALIGN(attr->values.usage);
+	if (attr->nullcount > 0)
+		usage += ARROWALIGN(attr->nullmap.usage);
+	return usage;
+}
+
+static size_t
+put_decimal_value(SQLattribute *attr, int row_index,
+				  const char *addr, int sz)
+{
+	Elog("not supported now");
+	return 0;
+}
+
+static size_t
+put_date_value(SQLattribute *attr, int row_index,
+			   const char *addr, int sz)
+{
+	size_t		usage;
+
+	if (!addr)
+	{
+		attr->nullcount++;
+		sql_buffer_clrbit(&attr->nullmap, row_index);
+		sql_buffer_append_zero(&attr->values, attr->attlen);
+	}
+    else
+    {
+		DateADT	value;
+
+		assert(sz == sizeof(DateADT));
+		sql_buffer_setbit(&attr->nullmap, row_index);
+		value = ntohl(*((const DateADT *)addr));
+		value -= UNIX_EPOCH_JDATE;
+		sql_buffer_append(&attr->values, &value, sz);
+	}
+	usage = ARROWALIGN(attr->values.usage);
+	if (attr->nullcount > 0)
+		usage += ARROWALIGN(attr->nullmap.usage);
+	return usage;
+}
+
+static size_t
+put_timestamp_value(SQLattribute *attr, int row_index,
+					const char *addr, int sz)
 {
 	size_t		usage;
 
@@ -138,21 +283,22 @@ put_inline_value(SQLattribute *attr, int row_index,
 	}
 	else
 	{
-		assert(attr->attlen == sz);
-		sql_buffer_setbit(&attr->nullmap, row_index);
-		sql_buffer_append(&attr->values, addr, sz);
-	}
-	usage = MAXALIGN(attr->values.usage);
-	if (attr->nullcount > 0)
-		usage += MAXALIGN(attr->nullmap.usage);
-	return usage;
-}
+		Timestamp	value;
+		uint32		h, l;
 
-static size_t
-put_decimal_value(SQLattribute *attr, int row_index,
-				  const char *addr, int sz)
-{
-	Elog("not supported now");
+		assert(sz == sizeof(Timestamp));
+		sql_buffer_setbit(&attr->nullmap, row_index);
+		h = ((const uint32 *)addr)[0];
+		l = ((const uint32 *)addr)[1];
+		value = (Timestamp)ntohl(h) << 32 | (Timestamp)ntohl(l);
+		/* convert PostgreSQL epoch to UNIX epoch */
+		value += (POSTGRES_EPOCH_JDATE -
+				  UNIX_EPOCH_JDATE) * USECS_PER_DAY;
+		sql_buffer_append(&attr->values, &value, sizeof(Timestamp));
+	}
+	usage = ARROWALIGN(attr->values.usage);
+	if (attr->nullcount > 0)
+		usage += ARROWALIGN(attr->nullmap.usage);
 	return 0;
 }
 
@@ -177,10 +323,10 @@ put_variable_value(SQLattribute *attr, int row_index,
 		sql_buffer_append(&attr->extra, addr, sz);
 		sql_buffer_append(&attr->values, &attr->extra.usage, sizeof(uint32));
 	}
-	usage = (MAXALIGN(attr->values.usage) +
-			 MAXALIGN(attr->extra.usage));
+	usage = (ARROWALIGN(attr->values.usage) +
+			 ARROWALIGN(attr->extra.usage));
 	if (attr->nullcount > 0)
-		usage += MAXALIGN(attr->nullmap.usage);
+		usage += ARROWALIGN(attr->nullmap.usage);
 	return usage;
 }
 
@@ -188,7 +334,7 @@ static size_t
 put_array_value(SQLattribute *attr, int row_index,
 				const char *addr, int sz)
 {
-	Elog("not supported now");
+	Elog("not supported yet");
 	return 0;
 }
 
@@ -205,7 +351,7 @@ put_composite_value(SQLattribute *attr, int row_index,
 	{
 		attr->nullcount++;
 		sql_buffer_clrbit(&attr->nullmap, row_index);
-		usage += MAXALIGN(attr->nullmap.usage);
+		usage += ARROWALIGN(attr->nullmap.usage);
 		/* null for all the subtypes */
 		for (j=0; j < subtypes->nfields; j++)
 		{
@@ -221,7 +367,7 @@ put_composite_value(SQLattribute *attr, int row_index,
 		if (sz < sizeof(uint32))
 			Elog("binary composite record corruption");
 		if (attr->nullcount > 0)
-			usage += MAXALIGN(attr->nullmap.usage);
+			usage += ARROWALIGN(attr->nullmap.usage);
 		nvalids = ntohl(*((const int *)pos));
 		pos += sizeof(int);
 		for (j=0; j < subtypes->nfields; j++)
@@ -280,9 +426,9 @@ attribute_assign_type_handler(SQLattribute *attr,
 	}
 	else if (attr->elemtype)
 	{
-		/* array type */
 		attr->garrow_type = GARROW_TYPE_LIST;
 		attr->put_value = put_array_value;
+		Elog("Array type in PostgreSQL, as List type in Apache Arrow is not supported yet");
 	}
 	else if (strcmp(nspname, "pg_catalog") == 0)
 	{
@@ -290,33 +436,50 @@ attribute_assign_type_handler(SQLattribute *attr,
 		if (strcmp(typname, "bool") == 0)
 		{
 			attr->garrow_type = GARROW_TYPE_BOOLEAN;
-			attr->put_value = put_inline_value;
+			attr->put_value = put_inline_8b_value;
 			return;
 		}
 		else if (strcmp(typname, "int2") == 0)
 		{
 			attr->garrow_type = GARROW_TYPE_INT16;
-			attr->put_value = put_inline_value;
+			attr->put_value = put_inline_16b_value;
 		}
 		else if (strcmp(typname, "int4") == 0)
 		{
 			attr->garrow_type = GARROW_TYPE_INT32;
-			attr->put_value = put_inline_value;
+			attr->put_value = put_inline_32b_value;
 		}
 		else if (strcmp(typname, "int8") == 0)
 		{
 			attr->garrow_type = GARROW_TYPE_INT64;
-			attr->put_value = put_inline_value;
+			attr->put_value = put_inline_64b_value;
 		}
 		else if (strcmp(typname, "float4") == 0)
 		{
 			attr->garrow_type = GARROW_TYPE_FLOAT;
-			attr->put_value = put_inline_value;
+			attr->put_value = put_inline_32b_value;
 		}
 		else if (strcmp(typname, "float8") == 0)
 		{
 			 attr->garrow_type = GARROW_TYPE_DOUBLE;
-			 attr->put_value = put_inline_value;
+			 attr->put_value = put_inline_64b_value;
+		}
+		else if (strcmp(typname, "date") == 0)
+		{
+			attr->garrow_type = GARROW_TYPE_DATE32;
+			attr->put_value = put_date_value;
+		}
+		else if (strcmp(typname, "time") == 0)
+		{
+			attr->garrow_type = GARROW_TYPE_TIME64;
+			attr->garrow_time_unit = GARROW_TIME_UNIT_MICRO;
+			attr->put_value = put_inline_64b_value;
+		}
+		else if (strcmp(typname, "timestamp") == 0)
+		{
+			attr->garrow_type = GARROW_TYPE_TIMESTAMP;
+			attr->garrow_time_unit = GARROW_TIME_UNIT_MICRO;
+			attr->put_value = put_timestamp_value;
 		}
 		else if (strcmp(typname, "text") == 0 ||
 				 strcmp(typname, "varchar") == 0 ||
@@ -344,27 +507,27 @@ attribute_assign_type_handler(SQLattribute *attr,
 		if (attr->attlen == sizeof(uchar))
 		{
 			attr->garrow_type = GARROW_TYPE_UINT8;
-			attr->put_value = put_inline_value;
+			attr->put_value = put_inline_8b_value;
 		}
 		else if (attr->attlen == sizeof(ushort))
 		{
 			attr->garrow_type = GARROW_TYPE_UINT16;
-			attr->put_value = put_inline_value;
+			attr->put_value = put_inline_16b_value;
 		}
 		else if (attr->attlen == sizeof(uint))
 		{
 			attr->garrow_type = GARROW_TYPE_UINT32;
-			attr->put_value = put_inline_value;
+			attr->put_value = put_inline_32b_value;
 		}
 		else if (attr->attlen == sizeof(ulong))
 		{
 			attr->garrow_type = GARROW_TYPE_UINT64;
-			attr->put_value = put_inline_value;
+			attr->put_value = put_inline_64b_value;
 		}
 		else
 		{
 			attr->garrow_type = GARROW_TYPE_BINARY;
-			attr->put_value = put_inline_value;
+			attr->put_value = put_variable_value;
 		}
 	}
 	else if (attr->attlen == -1)

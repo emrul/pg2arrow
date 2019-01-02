@@ -8,6 +8,8 @@
 
 #include "postgres.h"
 #include "access/htup_details.h"
+#include "datatype/timestamp.h"
+#include "utils/date.h"
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
@@ -22,6 +24,8 @@
 
 #include <libpq-fe.h>
 #include <arrow-glib/arrow-glib.h>
+
+#define	ARROWALIGN(LEN)		TYPEALIGN(64, (LEN))
 
 /* Basic type and label definitions */
 typedef	char		bool;
@@ -58,7 +62,8 @@ struct SQLattribute
 	char		typtype;		/* pg_type.typtype */
 	SQLtable   *subtypes;		/* valid, if composite type */
 	SQLattribute *elemtype;		/* valid, if array type */
-	GArrowType	garrow_type;
+	GArrowType	garrow_type;	/* one of GARROW_TYPE_* */
+	GArrowTimeUnit garrow_time_unit;	/* for time-related types */
 	/* data buffer */
 	size_t (*put_value)(SQLattribute *attr, int row_index,
 						const char *addr, int sz);
