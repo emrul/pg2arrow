@@ -104,7 +104,7 @@ sql_buffer_setbit(SQLbuffer *buf, size_t index)
 {
 	size_t		required = BITMAPLEN(index+1);
 	sql_buffer_expand(buf, required);
-	((uchar *)buf->ptr)[index>>3] |= (1 << (index & 7));
+	((uint8 *)buf->ptr)[index>>3] |= (1 << (index & 7));
 }
 
 static inline void
@@ -112,7 +112,7 @@ sql_buffer_clrbit(SQLbuffer *buf, size_t index)
 {
 	size_t		required = BITMAPLEN(index+1);
 	sql_buffer_expand(buf, required);
-	((uchar *)buf->ptr)[index>>3] &= ~(1 << (index & 7));
+	((uint8 *)buf->ptr)[index>>3] &= ~(1 << (index & 7));
 }
 
 static inline void
@@ -504,22 +504,22 @@ attribute_assign_type_handler(SQLattribute *attr,
 	/* elsewhere, use generic copy function */
 	if (attr->attlen > 0)
 	{
-		if (attr->attlen == sizeof(uchar))
+		if (attr->attlen == sizeof(uint8))
 		{
 			attr->garrow_type = GARROW_TYPE_UINT8;
 			attr->put_value = put_inline_8b_value;
 		}
-		else if (attr->attlen == sizeof(ushort))
+		else if (attr->attlen == sizeof(uint16))
 		{
 			attr->garrow_type = GARROW_TYPE_UINT16;
 			attr->put_value = put_inline_16b_value;
 		}
-		else if (attr->attlen == sizeof(uint))
+		else if (attr->attlen == sizeof(uint32))
 		{
 			attr->garrow_type = GARROW_TYPE_UINT32;
 			attr->put_value = put_inline_32b_value;
 		}
-		else if (attr->attlen == sizeof(ulong))
+		else if (attr->attlen == sizeof(uint64))
 		{
 			attr->garrow_type = GARROW_TYPE_UINT64;
 			attr->put_value = put_inline_64b_value;

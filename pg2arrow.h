@@ -27,19 +27,6 @@
 
 #define	ARROWALIGN(LEN)		TYPEALIGN(64, (LEN))
 
-/* Basic type and label definitions */
-typedef	char		bool;
-#ifndef true
-#define true		1
-#endif
-#ifndef false
-#define false		0
-#endif
-typedef unsigned char	uchar;
-typedef unsigned short	ushort;
-typedef unsigned int	uint;
-typedef unsigned long	ulong;
-
 typedef struct SQLbuffer		SQLbuffer;
 typedef struct SQLtable			SQLtable;
 typedef struct SQLattribute		SQLattribute;
@@ -58,7 +45,7 @@ struct SQLattribute
 	int			atttypmod;
 	short		attlen;
 	bool		attbyval;
-	uchar		attalign;		/* 1, 2, 4 or 8 */
+	uint8		attalign;		/* 1, 2, 4 or 8 */
 	char		typtype;		/* pg_type.typtype */
 	SQLtable   *subtypes;		/* valid, if composite type */
 	SQLattribute *elemtype;		/* valid, if array type */
@@ -75,6 +62,7 @@ struct SQLattribute
 
 struct SQLtable
 {
+	const char *filename;		/* XXX output filename */
 	size_t		segment_sz;		/* threshold of the memory usage */
 	size_t		nrooms;			/* threshold of the nitems */
 	size_t		nitems;			/* current number of rows */

@@ -371,6 +371,7 @@ int main(int argc, char * const argv[])
 	table = pgsql_create_buffer(conn, res,
 								batch_segment_sz,
 								batch_num_rows);
+	table->filename = output_filename;
 	do {
 		pgsql_append_results(table, res);
 		PQclear(res);
