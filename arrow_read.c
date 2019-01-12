@@ -138,9 +138,9 @@ readArrowKeyValue(ArrowKeyValue *kv, const char *pos)
 	FBTable		t = fetchFBTable((int32 *)pos);
 
 	memset(kv, 0, sizeof(ArrowKeyValue));
-	kv->node.tag     = ArrowNodeTag__KeyValue;
-	kv->key          = fetchString(&t, 0, &kv->_key_len);
-	kv->value        = fetchString(&t, 1, &kv->_value_len);
+	kv->tag		= ArrowNodeTag__KeyValue;
+	kv->key     = fetchString(&t, 0, &kv->_key_len);
+	kv->value   = fetchString(&t, 1, &kv->_value_len);
 }
 
 static void
@@ -253,75 +253,75 @@ __readArrowType(ArrowType *type, int type_tag, const char *type_pos)
 	switch (type_tag)
 	{
 		case ArrowType__Null:
-			type->node.tag = ArrowNodeTag__Null;
+			type->tag = ArrowNodeTag__Null;
 			break;
 		case ArrowType__Int:
-			type->node.tag = ArrowNodeTag__Int;
+			type->tag = ArrowNodeTag__Int;
 			if (type_pos)
 				readArrowTypeInt(&type->Int, type_pos);
 			break;
 		case ArrowType__FloatingPoint:
-			type->node.tag = ArrowNodeTag__FloatingPoint;
+			type->tag = ArrowNodeTag__FloatingPoint;
 			if (type_pos)
 				readArrowTypeFloatingPoint(&type->FloatingPoint, type_pos);
 			break;
 		case ArrowType__Binary:
-			type->node.tag = ArrowNodeTag__Binary;
+			type->tag = ArrowNodeTag__Binary;
 			break;
 		case ArrowType__Utf8:
-			type->node.tag = ArrowNodeTag__Utf8;
+			type->tag = ArrowNodeTag__Utf8;
 			break;
 		case ArrowType__Bool:
-			type->node.tag = ArrowNodeTag__Bool;
+			type->tag = ArrowNodeTag__Bool;
 			break;
 		case ArrowType__Decimal:
-			type->node.tag = ArrowNodeTag__Decimal;
+			type->tag = ArrowNodeTag__Decimal;
 			if (type_pos)
 				readArrowTypeDecimal(&type->Decimal, type_pos);
 			break;
 		case ArrowType__Date:
-			type->node.tag = ArrowNodeTag__Date;
+			type->tag = ArrowNodeTag__Date;
 			if (type_pos)
 				readArrowTypeDate(&type->Date, type_pos);
 			break;
 		case ArrowType__Time:
-			type->node.tag = ArrowNodeTag__Time;
+			type->tag = ArrowNodeTag__Time;
 			if (type_pos)
 				readArrowTypeTime(&type->Time, type_pos);
 			break;
 		case ArrowType__Timestamp:
-			type->node.tag = ArrowNodeTag__Timestamp;
+			type->tag = ArrowNodeTag__Timestamp;
 			if (type_pos)
 				readArrowTypeTimestamp(&type->Timestamp, type_pos);
 			break;
 		case ArrowType__Interval:
-			type->node.tag = ArrowNodeTag__Interval;
+			type->tag = ArrowNodeTag__Interval;
 			if (type_pos)
 				readArrowTypeInterval(&type->Interval, type_pos);
 			break;
 		case ArrowType__List:
-			type->node.tag = ArrowNodeTag__List;
+			type->tag = ArrowNodeTag__List;
 			break;
 		case ArrowType__Struct:
-			type->node.tag = ArrowNodeTag__Struct;
+			type->tag = ArrowNodeTag__Struct;
 			break;
 		case ArrowType__Union:
-			type->node.tag = ArrowNodeTag__Union;
+			type->tag = ArrowNodeTag__Union;
 			if (type_pos)
 				readArrowTypeUnion(&type->Union, type_pos);
 			break;
 		case ArrowType__FixedSizeBinary:
-			type->node.tag = ArrowNodeTag__FixedSizeBinary;
+			type->tag = ArrowNodeTag__FixedSizeBinary;
 			if (type_pos)
 				readArrowTypeFixedSizeBinary(&type->FixedSizeBinary, type_pos);
 			break;
 		case ArrowType__FixedSizeList:
-			type->node.tag = ArrowNodeTag__FixedSizeList;
+			type->tag = ArrowNodeTag__FixedSizeList;
 			if (type_pos)
 				readArrowTypeFixedSizeList(&type->FixedSizeList, type_pos);
 			break;
 		case ArrowType__Map:
-			type->node.tag = ArrowNodeTag__Map;
+			type->tag = ArrowNodeTag__Map;
 			if (type_pos)
 				readArrowTypeMap(&type->Map, type_pos);
 			break;
@@ -356,12 +356,12 @@ readArrowField(ArrowField *field, const char *pos)
 	int			i, nitems;
 
 	memset(field, 0, sizeof(ArrowField));
-	field->node.tag     = ArrowNodeTag__Field;
-	field->name         = fetchString(&t, 0, &field->_name_len);
-	field->nullable     = fetchBool(&t, 1);
+	field->tag		= ArrowNodeTag__Field;
+	field->name		= fetchString(&t, 0, &field->_name_len);
+	field->nullable	= fetchBool(&t, 1);
 	/* type */
-	type_tag            = fetchChar(&t, 2);
-	type_pos            = fetchOffset(&t, 3);
+	type_tag		= fetchChar(&t, 2);
+	type_pos		= fetchOffset(&t, 3);
 	__readArrowType(&field->type, type_tag, type_pos);
 
 	/* dictionary */
@@ -420,8 +420,8 @@ readArrowSchema(ArrowSchema *schema, const char *pos)
 	int32		i, nitems;
 
 	memset(schema, 0, sizeof(ArrowSchema));
-	schema->node.tag     = ArrowNodeTag__Schema;
-	schema->endianness   = fetchBool(&t, 0);
+	schema->tag			= ArrowNodeTag__Schema;
+	schema->endianness	= fetchBool(&t, 0);
 	/* [ fields ]*/
 	vector = fetchVector(&t, 1, &nitems);
 	if (nitems == 0)
@@ -473,8 +473,8 @@ readArrowRecordBatch(ArrowRecordBatch *rbatch, const char *pos)
 	int			i, nitems;
 
 	memset(rbatch, 0, sizeof(ArrowRecordBatch));
-	rbatch->node.tag = ArrowNodeTag__RecordBatch;
-	rbatch->length   = fetchLong(&t, 0);
+	rbatch->tag		= ArrowNodeTag__RecordBatch;
+	rbatch->length	= fetchLong(&t, 0);
 	/* nodes: [FieldNode] */
 	vector = (int64 *)fetchVector(&t, 1, &nitems);
 	if (nitems > 0)
@@ -483,9 +483,9 @@ readArrowRecordBatch(ArrowRecordBatch *rbatch, const char *pos)
 		for (i=0; i < nitems; i++)
 		{
 			ArrowFieldNode *f = pg_zalloc(sizeof(ArrowFieldNode));
-			f->node.tag   = ArrowNodeTag__FieldNode;
-			f->length     = *vector++;
-			f->null_count = *vector++;
+			f->tag			= ArrowNodeTag__FieldNode;
+			f->length		= *vector++;
+			f->null_count	= *vector++;
 			rbatch->nodes[i] = f;
 		}
 		rbatch->_num_nodes = nitems;
@@ -499,9 +499,9 @@ readArrowRecordBatch(ArrowRecordBatch *rbatch, const char *pos)
 		for (i=0; i < nitems; i++)
 		{
 			ArrowBuffer *b = pg_zalloc(sizeof(ArrowBuffer));
-			b->node.tag = ArrowNodeTag__Buffer;
-			b->offset   = *vector++;
-			b->length   = *vector++;
+			b->tag		= ArrowNodeTag__Buffer;
+			b->offset	= *vector++;
+			b->length	= *vector++;
 			rbatch->buffers[i] = b;
 		}
 		rbatch->_num_buffers = nitems;
@@ -515,9 +515,9 @@ readArrowDictionaryBatch(ArrowDictionaryBatch *dbatch, const char *pos)
 	const char *next;
 
 	memset(dbatch, 0, sizeof(ArrowDictionaryBatch));
-	dbatch->node.tag = ArrowNodeTag__DictionaryBatch;
-	dbatch->id      = fetchLong(&t, 0);
-	next            = fetchOffset(&t, 1);
+	dbatch->tag	= ArrowNodeTag__DictionaryBatch;
+	dbatch->id	= fetchLong(&t, 0);
+	next		= fetchOffset(&t, 1);
 	readArrowRecordBatch(&dbatch->data, next);
 	dbatch->isDelta = fetchBool(&t, 2);
 }
@@ -530,11 +530,11 @@ readArrowMessage(ArrowMessage *message, const char *pos)
 	const char	   *next;
 
 	memset(message, 0, sizeof(ArrowMessage));
-	message->node.tag     = ArrowNodeTag__Message;
-	message->version      = fetchShort(&t, 0);
-	mtype                 = fetchChar(&t, 1);
-	next                  = fetchOffset(&t, 2);
-	message->bodyLength   = fetchLong(&t, 3);
+	message->tag		= ArrowNodeTag__Message;
+	message->version	= fetchShort(&t, 0);
+	mtype				= fetchChar(&t, 1);
+	next				= fetchOffset(&t, 2);
+	message->bodyLength	= fetchLong(&t, 3);
 
 	if (message->version != ArrowMetadataVersion__V4)
 		Elog("metadata version %d is not supported", message->version);

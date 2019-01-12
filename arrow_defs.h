@@ -115,7 +115,6 @@ typedef enum
  */
 typedef enum
 {
-	ArrowNodeTag__Buffer,
 	/* types */
 	ArrowNodeTag__Null,
 	ArrowNodeTag__Int,
@@ -139,6 +138,7 @@ typedef enum
 	ArrowNodeTag__DictionaryEncoding,
 	ArrowNodeTag__Field,
 	ArrowNodeTag__FieldNode,
+	ArrowNodeTag__Buffer,
 	ArrowNodeTag__Schema,
 	ArrowNodeTag__RecordBatch,
 	ArrowNodeTag__DictionaryBatch,
@@ -148,22 +148,18 @@ typedef enum
 /*
  * ArrowNode
  */
-typedef struct ArrowNode	ArrowNode;
-struct ArrowNode
-{
-	ArrowNodeTag	tag;
-};
-
-/* Null */
 typedef struct
 {
-	ArrowNode		node;
-} ArrowTypeNull;
+	ArrowNodeTag	tag;
+} ArrowNode;
+
+/* Null */
+typedef ArrowNode	ArrowTypeNull;
 
 /* Int */
 typedef struct
 {
-	ArrowNode		node;
+	ArrowNodeTag	tag;
 	int32			bitWidth;
 	bool			is_signed;
 } ArrowTypeInt;
@@ -171,32 +167,23 @@ typedef struct
 /* FloatingPoint */
 typedef struct
 {
-	ArrowNode		node;
+	ArrowNodeTag	tag;
 	ArrowPrecision	precision;
 } ArrowTypeFloatingPoint;
 
 /* Utf8 */
-typedef struct
-{
-	ArrowNode		node;
-} ArrowTypeUtf8;
+typedef ArrowNode	ArrowTypeUtf8;
 
 /* Binary  */
-typedef struct
-{
-	ArrowNode		node;
-} ArrowTypeBinary;
+typedef ArrowNode	ArrowTypeBinary;
 
 /* Bool */
-typedef struct
-{
-	ArrowNode		node;
-} ArrowTypeBool;
+typedef ArrowNode	ArrowTypeBool;
 
 /* Decimal */
 typedef struct
 {
-	ArrowNode		node;
+	ArrowNodeTag	tag;
 	int32			precision;
 	int32			scale;
 } ArrowTypeDecimal;
@@ -204,14 +191,14 @@ typedef struct
 /* Date */
 typedef struct
 {
-	ArrowNode		node;
+	ArrowNodeTag	tag;
 	ArrowDateUnit	unit;
 } ArrowTypeDate;
 
 /* Time */
 typedef struct
 {
-	ArrowNode		node;
+	ArrowNodeTag	tag;
 	ArrowTimeUnit	unit;
 	int32			bitWidth;
 } ArrowTypeTime;
@@ -219,7 +206,7 @@ typedef struct
 /* Timestamp */
 typedef struct
 {
-	ArrowNode		node;
+	ArrowNodeTag	tag;
 	ArrowTimeUnit	unit;
 	const char	   *timezone;
 	int32			_timezone_len;
@@ -228,26 +215,20 @@ typedef struct
 /* Interval */
 typedef struct
 {
-	ArrowNode		node;
+	ArrowNodeTag	tag;
 	ArrowIntervalUnit unit;
 } ArrowTypeInterval;
 
 /* List */
-typedef struct
-{
-	ArrowNode		node;
-} ArrowTypeList;
+typedef ArrowNode	ArrowTypeList;
 
 /* Struct */
-typedef struct
-{
-	ArrowNode		node;
-} ArrowTypeStruct;
+typedef ArrowNode	ArrowTypeStruct;
 
 /* Union */
 typedef struct
 {
-	ArrowNode		node;
+	ArrowNodeTag	tag;
 	ArrowUnionMode	mode;
 	int32		   *typeIds;
 	int32			_num_typeIds;
@@ -256,21 +237,21 @@ typedef struct
 /* FixedSizeBinary */
 typedef struct
 {
-	ArrowNode		node;
+	ArrowNodeTag	tag;
 	int32			byteWidth;
 } ArrowTypeFixedSizeBinary;
 
 /* FixedSizeList */
 typedef struct
 {
-	ArrowNode		node;
+	ArrowNodeTag	tag;
 	int32			listSize;
 } ArrowTypeFixedSizeList;
 
 /* Map */
 typedef struct
 {
-	ArrowNode		node;
+	ArrowNodeTag	tag;
 	bool			keysSorted;
 } ArrowTypeMap;
 
@@ -279,7 +260,7 @@ typedef struct
  */
 typedef union
 {
-	ArrowNode				node;
+	ArrowNodeTag			tag;
 	ArrowTypeNull			Null;
 	ArrowTypeInt			Int;
 	ArrowTypeFloatingPoint	FloatingPoint;
@@ -304,7 +285,7 @@ typedef union
  */
 typedef struct
 {
-	ArrowNode		node;
+	ArrowNodeTag	tag;
 	int64			offset;
 	int64			length;
 } ArrowBuffer;
@@ -314,11 +295,11 @@ typedef struct
  */
 typedef struct
 {
-	ArrowNode	node;
-	const char *key;
-	const char *value;
-	int			_key_len;
-	int			_value_len;
+	ArrowNodeTag	tag;
+	const char	   *key;
+	const char	   *value;
+	int				_key_len;
+	int				_value_len;
 } ArrowKeyValue;
 
 /*
@@ -326,10 +307,10 @@ typedef struct
  */
 typedef struct
 {
-	ArrowNode	node;
-	int64		id;
-	ArrowTypeInt indexType;
-	bool		isOrdered;
+	ArrowNodeTag	tag;
+	int64			id;
+	ArrowTypeInt	indexType;
+	bool			isOrdered;
 } ArrowDictionaryEncoding;
 
 /*
@@ -337,7 +318,7 @@ typedef struct
  */
 typedef struct
 {
-	ArrowNode		node;
+	ArrowNodeTag	tag;
 	const char	   *name;
 	int				_name_len;
 	bool			nullable;
@@ -356,7 +337,7 @@ typedef struct
  */
 typedef struct
 {
-	ArrowNode		node;
+	ArrowNodeTag	tag;
 	uint64			length;
 	uint64			null_count;
 } ArrowFieldNode;
@@ -366,7 +347,7 @@ typedef struct
  */
 typedef struct
 {
-	ArrowNode		node;
+	ArrowNodeTag	tag;
 	ArrowEndianness	endianness;
 	/* vector of Field */
 	ArrowField	  **fields;
@@ -381,7 +362,7 @@ typedef struct
  */
 typedef struct
 {
-	ArrowNode		node;
+	ArrowNodeTag	tag;
 	int64			length;
 	/* vector of FieldNode */
 	ArrowFieldNode **nodes;
@@ -396,7 +377,7 @@ typedef struct
  */
 typedef struct
 {
-	ArrowNode		node;
+	ArrowNodeTag	tag;
 	int64			id;
 	ArrowRecordBatch data;
 	bool			isDelta;
@@ -418,13 +399,10 @@ typedef union
  */
 typedef struct
 {
-	ArrowNode		node;
+	ArrowNodeTag	tag;
 	ArrowMetadataVersion version;
 	ArrowMessageBody body;
 	uint64			bodyLength;
 } ArrowMessage;
-
-
-
 
 #endif		/* _ARROW_DEFS_H_ */
