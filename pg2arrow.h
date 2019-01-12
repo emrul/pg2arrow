@@ -24,6 +24,7 @@
 
 #include <libpq-fe.h>
 #include <arrow-glib/arrow-glib.h>
+#include "arrow_defs.h"
 
 #define	ARROWALIGN(LEN)		TYPEALIGN(64, (LEN))
 
@@ -77,6 +78,11 @@ void		pgsql_append_results(SQLtable *table, PGresult *res);
 void        pgsql_writeout_buffer(SQLtable *table);
 void		pgsql_dump_buffer(SQLtable *table);
 
+/* arrow_read.c */
+void		readArrowFile(const char *pathname);
+/* arrow_dump.c */
+void		dumpArrowNode(ArrowNode *node, FILE *out);
+
 /*
  * Error message and exit
  */
@@ -119,13 +125,4 @@ pg_strdup(const char *str)
 		Elog("out of memory");
 	return temp;
 }
-
-
-
-/*
- * support routines for composite data type
- */
-
-
-
 #endif	/* PG2ARROW_H */

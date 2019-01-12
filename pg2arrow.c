@@ -25,6 +25,7 @@ static char	   *pgsql_portno = NULL;
 static char	   *pgsql_username = NULL;
 static int		pgsql_password_prompt = 0;
 static char	   *pgsql_database = NULL;
+static char	   *dump_arrow_filename = NULL;
 
 static void
 usage(void)
@@ -52,6 +53,9 @@ usage(void)
 		  "  -w, --no-password       never prompt for password\n"
 		  "  -W, --password          force password prompt\n"
 		  "\n"
+		  "Debug options:\n"
+		  "      --dump=FILENAME     dump information of arrow file\n"
+		  "\n"
 		  "Report bugs to <pgstrom@heterodb.com>.\n",
 		  stderr);
 	exit(1);
@@ -73,6 +77,7 @@ parse_options(int argc, char * const argv[])
 		{"username",     required_argument,  NULL,  'U' },
 		{"no-password",  no_argument,        NULL,  'w' },
 		{"password",     no_argument,        NULL,  'W' },
+		{"dump",         required_argument,  NULL, 1000 },
 		{NULL, 0, NULL, 0},
 	};
 	int			c;
@@ -168,6 +173,11 @@ parse_options(int argc, char * const argv[])
 					Elog("-w and -W options are exclusive");
 				pgsql_password_prompt = 1;
 				break;
+			case 1000:
+				if (dump_arrow_filename)
+					Elog("--dump option specified twice");
+				dump_arrow_filename = optarg;
+				break;
 			default:
 				usage();
 				break;
@@ -190,6 +200,15 @@ parse_options(int argc, char * const argv[])
 	}
 	else if (optind != argc)
 		Elog("Too much command line arguments");
+	/*
+	 * special code path if '--dump' option is specified.
+	 */
+	if (dump_arrow_filename)
+	{
+		readArrowFile(dump_arrow_filename);
+		exit(0);
+	}
+
 	if (batch_segment_sz == 0 && batch_num_rows == 0)
 		batch_segment_sz = (1UL << 29);		/* 512MB in default */
 	if (!output_filename)
