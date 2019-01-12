@@ -23,6 +23,12 @@ typedef struct
 	FBVtable   *vtable;
 } FBTable;
 
+typedef struct
+{
+	int32		metaLength;
+	int32		headOffset;
+} FBMetaData;
+
 /* static variables/functions */
 static const char  *file_map_head;
 static const char  *file_map_tail;
@@ -349,6 +355,7 @@ readArrowField(ArrowField *field, const char *pos)
 	int32	   *vector;
 	int			i, nitems;
 
+	memset(field, 0, sizeof(ArrowField));
 	field->node.tag     = ArrowNodeTag__Field;
 	field->name         = fetchString(&t, 0, &field->_name_len);
 	field->nullable     = fetchBool(&t, 1);
@@ -459,17 +466,69 @@ readArrowSchema(ArrowSchema *schema, const char *pos)
 }
 
 static void
+readArrowRecordBatch(ArrowRecordBatch *rbatch, const char *pos)
+{
+	FBTable		t = fetchFBTable((int32 *)pos);
+	int64	   *vector;
+	int			i, nitems;
+
+	memset(rbatch, 0, sizeof(ArrowRecordBatch));
+	rbatch->node.tag = ArrowNodeTag__RecordBatch;
+	rbatch->length   = fetchLong(&t, 0);
+	/* nodes: [FieldNode] */
+	vector = (int64 *)fetchVector(&t, 1, &nitems);
+	if (nitems > 0)
+	{
+		rbatch->nodes = pg_zalloc(sizeof(ArrowFieldNode *) * nitems);
+		for (i=0; i < nitems; i++)
+		{
+			ArrowFieldNode *f = pg_zalloc(sizeof(ArrowFieldNode));
+			f->node.tag   = ArrowNodeTag__FieldNode;
+			f->length     = *vector++;
+			f->null_count = *vector++;
+			rbatch->nodes[i] = f;
+		}
+		rbatch->_num_nodes = nitems;
+	}
+
+	/* buffers: [Buffer] */
+	vector = (int64 *)fetchVector(&t, 2, &nitems);
+	if (nitems > 0)
+	{
+		rbatch->buffers = pg_zalloc(sizeof(ArrowBuffer *) * nitems);
+		for (i=0; i < nitems; i++)
+		{
+			ArrowBuffer *b = pg_zalloc(sizeof(ArrowBuffer));
+			b->node.tag = ArrowNodeTag__Buffer;
+			b->offset   = *vector++;
+			b->length   = *vector++;
+			rbatch->buffers[i] = b;
+		}
+		rbatch->_num_buffers = nitems;
+	}
+}
+
+static void
+readArrowDictionaryBatch(ArrowDictionaryBatch *dbatch, const char *pos)
+{
+	FBTable		t = fetchFBTable((int32 *)pos);
+	const char *next;
+
+	memset(dbatch, 0, sizeof(ArrowDictionaryBatch));
+	dbatch->node.tag = ArrowNodeTag__DictionaryBatch;
+	dbatch->id      = fetchLong(&t, 0);
+	next            = fetchOffset(&t, 1);
+	readArrowRecordBatch(&dbatch->data, next);
+	dbatch->isDelta = fetchBool(&t, 2);
+}
+
+static void
 readArrowMessage(ArrowMessage *message, const char *pos)
 {
-	struct {
-		int32	metaLength;
-		int32	headOffset;
-	} *map	= (void *)pos;
-	FBTable			t;
+	FBTable			t = fetchFBTable((int32 *)pos);
 	int				mtype;
 	const char	   *next;
 
-	t = fetchFBTable((char *)&map->headOffset + map->headOffset);
 	memset(message, 0, sizeof(ArrowMessage));
 	message->node.tag     = ArrowNodeTag__Message;
 	message->version      = fetchShort(&t, 0);
@@ -486,10 +545,10 @@ readArrowMessage(ArrowMessage *message, const char *pos)
 			readArrowSchema(&message->body.schema, next);
 			break;
 		case ArrowMessageHeader__DictionaryBatch:
-			puts("DictionaryBatch");
+			readArrowDictionaryBatch(&message->body.dictionaryBatch, next);
 			break;
 		case ArrowMessageHeader__RecordBatch:
-			puts("RecordBatch");
+			readArrowRecordBatch(&message->body.recordBatch, next);
 			break;
 		case ArrowMessageHeader__Tensor:
 			Elog("message type: Tensor is not implemented");
@@ -509,10 +568,11 @@ readArrowMessage(ArrowMessage *message, const char *pos)
 void
 readArrowFile(const char *pathname)
 {
-	int			fdesc;
-	struct stat	st_buf;
-	size_t		file_sz;
-	ArrowMessage node;
+	int				fdesc;
+	struct stat		st_buf;
+	size_t			file_sz;
+	FBMetaData	   *meta;
+	int				i;
 
 	fdesc = open(pathname, O_RDONLY);
 	if (fdesc < 0)
@@ -529,8 +589,16 @@ readArrowFile(const char *pathname)
 	/* check signature */
 	if (memcmp(file_map_head, "ARROW1\0\0", 8) != 0)
 		Elog("file does not look like Apache Arrow file");
-	readArrowMessage(&node, file_map_head + 8);
+	meta = (FBMetaData *)(file_map_head + 8);
+	for (i=0; i < 2; i++)
+	{
+		const char	   *pos = (char *)&meta->headOffset + meta->headOffset;
+		ArrowMessage	node;
 
-	dumpArrowNode((ArrowNode *)&node, stdout);
-	putchar('\n');
+		readArrowMessage(&node, pos);
+		dumpArrowNode((ArrowNode *)&node, stdout);
+		putchar('\n');
+
+		meta = (FBMetaData *)((char *)&meta->headOffset + meta->metaLength);
+	}
 }

@@ -173,7 +173,11 @@ dumpArrowField(ArrowField *node, FILE *out)
 
 static void
 dumpArrowFieldNode(ArrowFieldNode *node, FILE *out)
-{}
+{
+	fprintf(out, "{FieldNode: length=%ld, null_count=%ld}",
+			node->length,
+			node->null_count);
+}
 
 static void
 dumpArrowSchema(ArrowSchema *node, FILE *out)
@@ -339,6 +343,7 @@ dumpArrowNode(ArrowNode *node, FILE *out)
 			dumpArrowMessage((ArrowMessage *)node, out);
 			break;
 		default:
+			fprintf(out, "{!Unknown!}");
 			break;
 	}
 }
