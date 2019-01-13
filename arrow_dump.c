@@ -257,6 +257,39 @@ dumpArrowMessage(ArrowMessage *node, FILE *out)
 	fprintf(out, ", bodyLength=%lu}", node->bodyLength);
 }
 
+static void
+dumpArrowBlock(ArrowBlock *node, FILE *out)
+{
+	fprintf(out, "{Block: offset=%ld, metaDataLength=%d bodyLength=%ld}",
+			node->offset,
+			node->metaDataLength,
+			node->bodyLength);
+}
+
+static void
+dumpArrowFooter(ArrowFooter *node, FILE *out)
+{
+	int		i;
+
+	fprintf(out, "{Footer: version=%d, schema=", node->version);
+	dumpArrowSchema(&node->schema, out);
+	fprintf(out, ", dictionaries=[");
+	for (i=0; i < node->_num_dictionaries; i++)
+	{
+		if (i > 0)
+			fprintf(out, ", ");
+		dumpArrowBlock(&node->dictionaries[i], out);
+	}
+	fprintf(out, "], recordBatches=[");
+	for (i=0; i < node->_num_recordBatches; i++)
+	{
+		if (i > 0)
+			fprintf(out, ", ");
+		dumpArrowBlock(&node->recordBatches[i], out);
+	}
+	fprintf(out, "]}");
+}
+
 void
 dumpArrowNode(ArrowNode *node, FILE *out)
 {
@@ -341,6 +374,12 @@ dumpArrowNode(ArrowNode *node, FILE *out)
 			break;
 		case ArrowNodeTag__Message:
 			dumpArrowMessage((ArrowMessage *)node, out);
+			break;
+		case ArrowNodeTag__Block:
+			dumpArrowBlock((ArrowBlock *)node, out);
+			break;
+		case ArrowNodeTag__Footer:
+			dumpArrowFooter((ArrowFooter *)node, out);
 			break;
 		default:
 			fprintf(out, "{!Unknown!}");

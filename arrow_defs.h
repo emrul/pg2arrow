@@ -143,6 +143,8 @@ typedef enum
 	ArrowNodeTag__RecordBatch,
 	ArrowNodeTag__DictionaryBatch,
 	ArrowNodeTag__Message,
+	ArrowNodeTag__Block,
+	ArrowNodeTag__Footer,
 } ArrowNodeTag;
 
 /*
@@ -404,5 +406,30 @@ typedef struct
 	ArrowMessageBody body;
 	uint64			bodyLength;
 } ArrowMessage;
+
+/*
+ * Block
+ */
+typedef struct
+{
+	ArrowNodeTag	tag;
+	int64			offset;
+	int32			metaDataLength;
+	int64			bodyLength;
+} ArrowBlock;
+
+/*
+ * Footer
+ */
+typedef struct
+{
+	ArrowNodeTag	tag;
+	ArrowMetadataVersion version;
+	ArrowSchema		schema;
+	ArrowBlock	   *dictionaries;
+	int				_num_dictionaries;
+	ArrowBlock	   *recordBatches;
+	int				_num_recordBatches;
+} ArrowFooter;
 
 #endif		/* _ARROW_DEFS_H_ */

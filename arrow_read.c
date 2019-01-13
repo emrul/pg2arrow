@@ -563,6 +563,64 @@ readArrowMessage(ArrowMessage *message, const char *pos)
 }
 
 /*
+ * readArrowBlock (read inline structure)
+ */
+static size_t
+readArrowBlock(ArrowBlock *node, const char *pos)
+{
+	struct {
+		int64		offset			__attribute__ ((aligned(8)));
+		int32		metaDataLength	__attribute__ ((aligned(8)));
+		int64		bodyLength		__attribute__ ((aligned(8)));
+	} *fmap = (void *) pos;
+
+	memset(node, 0, sizeof(ArrowBlock));
+	node->tag            = ArrowNodeTag__Block;
+	node->offset         = fmap->offset;
+	node->metaDataLength = fmap->metaDataLength;
+	node->bodyLength     = fmap->bodyLength;
+
+	return sizeof(*fmap);
+}
+
+/*
+ * readArrowFooter
+ */
+static void
+readArrowFooter(ArrowFooter *node, const char *pos)
+{
+	FBTable			t = fetchFBTable((int32 *)pos);
+	const char	   *next;
+	int				i, nitems;
+
+	memset(node, 0, sizeof(ArrowFooter));
+	node->tag		= ArrowNodeTag__Footer;
+	node->version	= fetchShort(&t, 0);
+	/* schema */
+	next = fetchOffset(&t, 1);
+	readArrowSchema(&node->schema, next);
+	/* [dictionaries] */
+	next = (const char *)fetchVector(&t, 2, &nitems);
+	if (nitems > 0)
+	{
+		node->dictionaries = pg_zalloc(sizeof(ArrowBlock) * nitems);
+		for (i=0; i < nitems; i++)
+			next += readArrowBlock(&node->dictionaries[i], next);
+		node->_num_dictionaries = nitems;
+	}
+
+	/* [recordBatches] */
+	next = (const char *)fetchVector(&t, 3, &nitems);
+	if (nitems > 0)
+	{
+		node->recordBatches = pg_zalloc(sizeof(ArrowBlock) * nitems);
+		for (i=0; i < nitems; i++)
+			next += readArrowBlock(&node->recordBatches[i], next);
+		node->_num_recordBatches = nitems;
+	}
+}
+
+/*
  * readArrowFile - read the supplied apache arrow file
  */
 void
@@ -570,35 +628,65 @@ readArrowFile(const char *pathname)
 {
 	int				fdesc;
 	struct stat		st_buf;
-	size_t			file_sz;
+	size_t			mmap_sz;
 	FBMetaData	   *meta;
-	int				i;
+	const char	   *pos;
+	int32			i, offset;
+	ArrowFooter		footer;
+	ArrowMessage	message;
 
 	fdesc = open(pathname, O_RDONLY);
 	if (fdesc < 0)
 		Elog("failed on open('%s'): %m", pathname);
 	if (fstat(fdesc, &st_buf) != 0)
 		Elog("failed on fstat('%s'): %m", pathname);
-	file_sz = TYPEALIGN(sysconf(_SC_PAGESIZE), st_buf.st_size);
+	mmap_sz = TYPEALIGN(sysconf(_SC_PAGESIZE), st_buf.st_size);
 
-	file_map_head = mmap(NULL, file_sz, PROT_READ, MAP_SHARED, fdesc, 0);
+	file_map_head = mmap(NULL, mmap_sz, PROT_READ, MAP_SHARED, fdesc, 0);
 	if (file_map_head == MAP_FAILED)
 		Elog("failed on mmap(2): %m");
-	file_map_tail = file_map_head + file_sz;
+	file_map_tail = file_map_head + st_buf.st_size;
+	/* signature checks */
+	if (memcmp(file_map_head, "ARROW1\0\0", 8) != 0 ||
+		memcmp(file_map_tail - 6, "ARROW1", 6) != 0)
+		Elog("file signature mismatch");
 
-	/* check signature */
-	if (memcmp(file_map_head, "ARROW1\0\0", 8) != 0)
-		Elog("file does not look like Apache Arrow file");
-	meta = (FBMetaData *)(file_map_head + 8);
-	for (i=0; i < 2; i++)
+	/* read ArrowFooter on the tail of file */
+	pos = file_map_tail - 6 - sizeof(int32);
+	offset = *((int32 *)pos);
+	pos -= offset;
+	offset = *((int32 *)pos);
+	readArrowFooter(&footer, pos + offset);
+
+	printf("[Footer]\n");
+	dumpArrowNode((ArrowNode *)&footer, stdout);
+	putchar('\n');
+
+	for (i=0; i < footer._num_dictionaries; i++)
 	{
-		const char	   *pos = (char *)&meta->headOffset + meta->headOffset;
-		ArrowMessage	node;
+		ArrowBlock	   *b = &footer.dictionaries[i];
 
-		readArrowMessage(&node, pos);
-		dumpArrowNode((ArrowNode *)&node, stdout);
+		meta = (FBMetaData *)(file_map_head + b->offset);
+		if (b->metaDataLength != meta->metaLength + sizeof(int32))
+			Elog("metadata length mismatch");
+		pos = (const char *)&meta->headOffset + meta->headOffset;
+		readArrowMessage(&message, pos);
+		printf("[Dictionary Batch %d]\n", i);
+		dumpArrowNode((ArrowNode *)&message, stdout);
 		putchar('\n');
+	}
 
-		meta = (FBMetaData *)((char *)&meta->headOffset + meta->metaLength);
+	for (i=0; i < footer._num_recordBatches; i++)
+	{
+		ArrowBlock	   *b = &footer.recordBatches[i];
+
+		meta = (FBMetaData *)(file_map_head + b->offset);
+		if (b->metaDataLength != meta->metaLength + sizeof(int32))
+			Elog("metadata length mismatch");
+		pos = (const char *)&meta->headOffset + meta->headOffset;
+		readArrowMessage(&message, pos);
+		printf("[Record Batch %d]\n", i);
+		dumpArrowNode((ArrowNode *)&message, stdout);
+		putchar('\n');
 	}
 }
