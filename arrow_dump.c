@@ -119,7 +119,7 @@ dumpArrowBuffer(ArrowBuffer *node, FILE *out)
 static void
 dumpArrowKeyValue(ArrowKeyValue *node, FILE *out)
 {
-	fprintf(out, "{KeyValue: key=%s, value=%s}",
+	fprintf(out, "{KeyValue: key=(%s), value=(%s)}",
 			node->key,
 			node->value);
 }
@@ -149,10 +149,7 @@ dumpArrowField(ArrowField *node, FILE *out)
 		{
 			if (i > 0)
 				fprintf(out, ", ");
-			if (node->children[i])
-				dumpArrowNode((ArrowNode *)node->children[i], out);
-			else
-				fprintf(out, "NULL");
+			dumpArrowNode((ArrowNode *)&node->children[i], out);
 		}
 	}
 	fprintf(out, "], custom_metadata=[");
@@ -162,10 +159,7 @@ dumpArrowField(ArrowField *node, FILE *out)
 		{
 			if (i > 0)
 				fprintf(out, ", ");
-			if (node->custom_metadata[i])
-				dumpArrowNode((ArrowNode *)node->custom_metadata[i], out);
-			else
-				fprintf(out, "NULL");
+			dumpArrowNode((ArrowNode *)&node->custom_metadata[i], out);
 		}
 	}
 	fprintf(out, "]}");
@@ -191,20 +185,14 @@ dumpArrowSchema(ArrowSchema *node, FILE *out)
 	{
 		if (i > 0)
 			fprintf(out, ", ");
-		if (node->fields[i])
-			dumpArrowField(node->fields[i], out);
-		else
-			fprintf(out, "NULL");
+		dumpArrowField(&node->fields[i], out);
 	}
 	fprintf(out, "], custom_metadata [");
 	for (i=0; i < node->_num_custom_metadata; i++)
 	{
 		if (i > 0)
 			fprintf(out, ", ");
-		if (node->custom_metadata[i])
-			dumpArrowKeyValue(node->custom_metadata[i], out);
-		else
-			fprintf(out, "NULL");
+		dumpArrowKeyValue(&node->custom_metadata[i], out);
 	}
 	fprintf(out, "]}");
 }
@@ -220,20 +208,14 @@ dumpArrowRecordBatch(ArrowRecordBatch *node, FILE *out)
 	{
 		if (i > 0)
 			fprintf(out, ", ");
-		if (node->nodes[i])
-			dumpArrowFieldNode(node->nodes[i], out);
-		else
-			fprintf(out, "NULL");
+		dumpArrowFieldNode(&node->nodes[i], out);
 	}
 	fprintf(out, "], buffers=[");
 	for (i=0; i < node->_num_buffers; i++)
 	{
 		if (i > 0)
 			fprintf(out, ", ");
-		if (node->buffers[i])
-			dumpArrowBuffer(node->buffers[i], out);
-		else
-			fprintf(out, "NULL");
+		dumpArrowBuffer(&node->buffers[i], out);
 	}
 	fprintf(out, "]}");
 }

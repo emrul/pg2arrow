@@ -327,10 +327,10 @@ typedef struct
 	ArrowType		type;
 	ArrowDictionaryEncoding dictionary;
 	/* vector of nested data types */
-	ArrowType	  **children;
+	ArrowType	   *children;
 	int				_num_children;
 	/* vector of user defined metadata */
-	ArrowKeyValue **custom_metadata;
+	ArrowKeyValue  *custom_metadata;
 	int				_num_custom_metadata;
 } ArrowField;
 
@@ -352,10 +352,10 @@ typedef struct
 	ArrowNodeTag	tag;
 	ArrowEndianness	endianness;
 	/* vector of Field */
-	ArrowField	  **fields;
+	ArrowField	   *fields;
 	int				_num_fields;
 	/* List of KeyValue */
-	ArrowKeyValue **custom_metadata;
+	ArrowKeyValue  *custom_metadata;
 	int				_num_custom_metadata;
 } ArrowSchema;
 
@@ -367,10 +367,10 @@ typedef struct
 	ArrowNodeTag	tag;
 	int64			length;
 	/* vector of FieldNode */
-	ArrowFieldNode **nodes;
+	ArrowFieldNode  *nodes;
 	int				_num_nodes;
 	/* vector of Buffer */
-	ArrowBuffer	   **buffers;
+	ArrowBuffer	    *buffers;
 	int				_num_buffers;
 } ArrowRecordBatch;
 

@@ -371,42 +371,34 @@ readArrowField(ArrowField *field, const char *pos)
 
 	/* children */
 	vector = fetchVector(&t, 5, &nitems);
-	if (nitems == 0)
-		field->children = NULL;
-	else
+	if (nitems > 0)
 	{
-		field->children = pg_zalloc(sizeof(ArrowType *) * nitems);
+		field->children = pg_zalloc(sizeof(ArrowType) * nitems);
 		for (i=0; i < nitems; i++)
 		{
 			int		offset = vector[i];
-			ArrowType *t;
 
 			if (offset == 0)
-				continue;
-			t = pg_zalloc(sizeof(ArrowType));
-			readArrowType(t, (const char *)&vector[i] + offset);
-			field->children[i] = t;
+				Elog("ArrowField has NULL-element in children[]");
+			readArrowType(&field->children[i],
+						  (const char *)&vector[i] + offset);
 		}
 	}
 	field->_num_children = nitems;
 
 	/* custom_metadata */
 	vector = fetchVector(&t, 6, &nitems);
-	if (nitems == 0)
-		field->custom_metadata = NULL;
-	else
+	if (nitems > 0)
 	{
-		field->custom_metadata = pg_zalloc(sizeof(ArrowKeyValue *) * nitems);
+		field->custom_metadata = pg_zalloc(sizeof(ArrowKeyValue) * nitems);
 		for (i=0; i < nitems; i++)
 		{
 			int		offset = vector[i];
-			ArrowKeyValue *kv;
 
 			if (offset == 0)
-				continue;
-			kv = pg_zalloc(sizeof(ArrowKeyValue));
-			readArrowKeyValue(kv, (const char *)&vector[i] + offset);
-			field->custom_metadata[i] = kv;
+				Elog("ArrowField has NULL-element in custom_metadata[]");
+			readArrowKeyValue(&field->custom_metadata[i],
+							  (const char *)&vector[i] + offset);
 		}
 	}
 	field->_num_custom_metadata = nitems;
@@ -424,88 +416,102 @@ readArrowSchema(ArrowSchema *schema, const char *pos)
 	schema->endianness	= fetchBool(&t, 0);
 	/* [ fields ]*/
 	vector = fetchVector(&t, 1, &nitems);
-	if (nitems == 0)
-		schema->fields = NULL;
-	else
+	if (nitems > 0)
 	{
-		schema->fields = pg_zalloc(sizeof(ArrowField *) * nitems);
+		schema->fields = pg_zalloc(sizeof(ArrowField) * nitems);
 		for (i=0; i < nitems; i++)
 		{
 			int		offset = vector[i];
-			ArrowField *f;
 
 			if (offset == 0)
-				continue;
-			f = pg_zalloc(sizeof(ArrowField));
-			readArrowField(f, (const char *)&vector[i] + offset);
-			schema->fields[i] = f;
+				Elog("ArrowSchema has NULL-element in fields[]");
+			readArrowField(&schema->fields[i],
+						   (const char *)&vector[i] + offset);
 		}
 	}
 	schema->_num_fields = nitems;
 
 	/* [ custom_metadata ] */
 	vector = fetchVector(&t, 2, &nitems);
-	if (nitems == 0)
-		schema->custom_metadata = NULL;
-	else
+	if (nitems > 0)
 	{
 		schema->custom_metadata = pg_zalloc(sizeof(ArrowKeyValue) * nitems);
 		for (i=0; i < nitems; i++)
 		{
 			int		offset = vector[i];
-			ArrowKeyValue *kv;
 
 			if (offset == 0)
-				continue;
-			kv = pg_zalloc(sizeof(ArrowKeyValue));
-			readArrowKeyValue(kv, (const char *)&vector[i] + offset);
-			schema->custom_metadata[i] = kv;
+				Elog("ArrowSchema has NULL-element in custom_metadata[]");
+			readArrowKeyValue(&schema->custom_metadata[i],
+							  (const char *)&vector[i] + offset);
 		}
 	}
 	schema->_num_custom_metadata = nitems;
+}
+
+static size_t
+readArrowFieldNode(ArrowFieldNode *node, const char *pos)
+{
+	struct {
+		int64		length		__attribute__ ((aligned(8)));
+		int64		null_count	__attribute__ ((aligned(8)));
+	} *fmap = (void *) pos;
+
+	memset(node, 0, sizeof(ArrowFieldNode));
+	node->tag			= ArrowNodeTag__FieldNode;
+	node->length		= fmap->length;
+	node->null_count	= fmap->null_count;
+
+	return sizeof(*fmap);
+}
+
+static size_t
+readArrowBuffer(ArrowBuffer *node, const char *pos)
+{
+	struct {
+		int64		offset		__attribute__ ((aligned(8)));
+		int64		length		__attribute__ ((aligned(8)));
+	} *fmap = (void *) pos;
+
+	memset(node, 0, sizeof(ArrowBuffer));
+	node->tag			= ArrowNodeTag__Buffer;
+	node->offset		= fmap->offset;
+	node->length		= fmap->length;
+
+	return sizeof(*fmap);
+
+
 }
 
 static void
 readArrowRecordBatch(ArrowRecordBatch *rbatch, const char *pos)
 {
 	FBTable		t = fetchFBTable((int32 *)pos);
-	int64	   *vector;
+	const char *next;
 	int			i, nitems;
 
 	memset(rbatch, 0, sizeof(ArrowRecordBatch));
 	rbatch->tag		= ArrowNodeTag__RecordBatch;
 	rbatch->length	= fetchLong(&t, 0);
 	/* nodes: [FieldNode] */
-	vector = (int64 *)fetchVector(&t, 1, &nitems);
+	next = (const char *)fetchVector(&t, 1, &nitems);
 	if (nitems > 0)
 	{
-		rbatch->nodes = pg_zalloc(sizeof(ArrowFieldNode *) * nitems);
+		rbatch->nodes = pg_zalloc(sizeof(ArrowFieldNode) * nitems);
 		for (i=0; i < nitems; i++)
-		{
-			ArrowFieldNode *f = pg_zalloc(sizeof(ArrowFieldNode));
-			f->tag			= ArrowNodeTag__FieldNode;
-			f->length		= *vector++;
-			f->null_count	= *vector++;
-			rbatch->nodes[i] = f;
-		}
-		rbatch->_num_nodes = nitems;
+			next += readArrowFieldNode(&rbatch->nodes[i], next);
 	}
+	rbatch->_num_nodes = nitems;
 
 	/* buffers: [Buffer] */
-	vector = (int64 *)fetchVector(&t, 2, &nitems);
+	next = (const char *)fetchVector(&t, 2, &nitems);
 	if (nitems > 0)
 	{
-		rbatch->buffers = pg_zalloc(sizeof(ArrowBuffer *) * nitems);
+		rbatch->buffers = pg_zalloc(sizeof(ArrowBuffer) * nitems);
 		for (i=0; i < nitems; i++)
-		{
-			ArrowBuffer *b = pg_zalloc(sizeof(ArrowBuffer));
-			b->tag		= ArrowNodeTag__Buffer;
-			b->offset	= *vector++;
-			b->length	= *vector++;
-			rbatch->buffers[i] = b;
-		}
-		rbatch->_num_buffers = nitems;
+			next += readArrowBuffer(&rbatch->buffers[i], next);
 	}
+	rbatch->_num_buffers = nitems;
 }
 
 static void
