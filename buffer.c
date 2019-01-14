@@ -418,84 +418,100 @@ attribute_assign_type_handler(SQLattribute *attr,
 							  const char *nspname,
 							  const char *typname)
 {
+	memset(&attr->arrow_type, 0, sizeof(ArrowType));
 	if (attr->subtypes)
 	{
 		/* composite type */
-		attr->garrow_type = GARROW_TYPE_STRUCT;
+		attr->arrow_type.tag = ArrowNodeTag__Struct;
 		attr->put_value = put_composite_value;
 	}
 	else if (attr->elemtype)
 	{
-		attr->garrow_type = GARROW_TYPE_LIST;
+		attr->arrow_type.tag = ArrowNodeTag__List;
 		attr->put_value = put_array_value;
-		Elog("Array type in PostgreSQL, as List type in Apache Arrow is not supported yet");
+		Elog("array in PostgreSQL / List in Arrow is not supported now");
 	}
 	else if (strcmp(nspname, "pg_catalog") == 0)
 	{
 		/* built-in data type? */
 		if (strcmp(typname, "bool") == 0)
 		{
-			attr->garrow_type = GARROW_TYPE_BOOLEAN;
+			attr->arrow_type.tag = ArrowNodeTag__Bool;
 			attr->put_value = put_inline_8b_value;
 			return;
 		}
 		else if (strcmp(typname, "int2") == 0)
 		{
-			attr->garrow_type = GARROW_TYPE_INT16;
+			attr->arrow_type.tag = ArrowNodeTag__Int;
+			attr->arrow_type.Int.bitWidth = 16;
+			attr->arrow_type.Int.is_signed = true;
 			attr->put_value = put_inline_16b_value;
 		}
 		else if (strcmp(typname, "int4") == 0)
 		{
-			attr->garrow_type = GARROW_TYPE_INT32;
+			attr->arrow_type.tag = ArrowNodeTag__Int;
+			attr->arrow_type.Int.bitWidth = 32;
+			attr->arrow_type.Int.is_signed = true;
 			attr->put_value = put_inline_32b_value;
 		}
 		else if (strcmp(typname, "int8") == 0)
 		{
-			attr->garrow_type = GARROW_TYPE_INT64;
+			attr->arrow_type.tag = ArrowNodeTag__Int;
+			attr->arrow_type.Int.bitWidth = 64;
+			attr->arrow_type.Int.is_signed = true;
 			attr->put_value = put_inline_64b_value;
 		}
 		else if (strcmp(typname, "float4") == 0)
 		{
-			attr->garrow_type = GARROW_TYPE_FLOAT;
+			attr->arrow_type.tag = ArrowNodeTag__FloatingPoint;
+			attr->arrow_type.FloatingPoint.precision = 32;
 			attr->put_value = put_inline_32b_value;
 		}
 		else if (strcmp(typname, "float8") == 0)
 		{
-			 attr->garrow_type = GARROW_TYPE_DOUBLE;
-			 attr->put_value = put_inline_64b_value;
+			attr->arrow_type.tag = ArrowNodeTag__FloatingPoint;
+			attr->arrow_type.FloatingPoint.precision = 64;
+			attr->put_value = put_inline_64b_value;
 		}
 		else if (strcmp(typname, "date") == 0)
 		{
-			attr->garrow_type = GARROW_TYPE_DATE32;
+			attr->arrow_type.tag = ArrowNodeTag__Date;
+			attr->arrow_type.Date.unit = ArrowDateUnit__Day;
 			attr->put_value = put_date_value;
 		}
 		else if (strcmp(typname, "time") == 0)
 		{
-			attr->garrow_type = GARROW_TYPE_TIME64;
-			attr->garrow_time_unit = GARROW_TIME_UNIT_MICRO;
+			attr->arrow_type.tag = ArrowNodeTag__Time;
+			attr->arrow_type.Time.unit = ArrowTimeUnit__MicroSecond;
+			attr->arrow_type.Time.bitWidth = 64;
 			attr->put_value = put_inline_64b_value;
 		}
 		else if (strcmp(typname, "timestamp") == 0)
 		{
-			attr->garrow_type = GARROW_TYPE_TIMESTAMP;
-			attr->garrow_time_unit = GARROW_TIME_UNIT_MICRO;
+			attr->arrow_type.tag = ArrowNodeTag__Timestamp;
+			attr->arrow_type.Timestamp.unit = ArrowTimeUnit__MicroSecond;
 			attr->put_value = put_timestamp_value;
 		}
 		else if (strcmp(typname, "text") == 0 ||
 				 strcmp(typname, "varchar") == 0 ||
 				 strcmp(typname, "bpchar") == 0)
 		{
-			attr->garrow_type = GARROW_TYPE_STRING;
+			attr->arrow_type.tag = ArrowNodeTag__Utf8;
 			attr->put_value = put_variable_value;
 		}
 		else if (strcmp(typname, "numeric") == 0 &&
 				 attr->atttypmod >= VARHDRSZ)
 		{
+			int		typmod = attr->atttypmod - VARHDRSZ;
+			int		precision = (typmod >> 16) & 0xffff;
+			int		scale = (typmod & 0xffff);
 			/*
 			 * Memo: the upper 16bit of (typmod - VARHDRSZ) is precision,
 			 * the lower 16bit is scale of the numeric data type.
 			 */
-			attr->garrow_type = GARROW_TYPE_DECIMAL;
+			attr->arrow_type.tag = ArrowNodeTag__Decimal;
+			attr->arrow_type.Decimal.precision = precision;
+			attr->arrow_type.Decimal.scale = scale;
 			attr->put_value = put_decimal_value;
 		}
 	}
@@ -506,33 +522,43 @@ attribute_assign_type_handler(SQLattribute *attr,
 	{
 		if (attr->attlen == sizeof(uint8))
 		{
-			attr->garrow_type = GARROW_TYPE_UINT8;
+			attr->arrow_type.tag = ArrowNodeTag__Int;
+			attr->arrow_type.Int.bitWidth = 8;
+			attr->arrow_type.Int.is_signed = false;
 			attr->put_value = put_inline_8b_value;
 		}
 		else if (attr->attlen == sizeof(uint16))
 		{
-			attr->garrow_type = GARROW_TYPE_UINT16;
+			attr->arrow_type.tag = ArrowNodeTag__Int;
+			attr->arrow_type.Int.bitWidth = 16;
+			attr->arrow_type.Int.is_signed = false;
 			attr->put_value = put_inline_16b_value;
 		}
 		else if (attr->attlen == sizeof(uint32))
 		{
-			attr->garrow_type = GARROW_TYPE_UINT32;
+			attr->arrow_type.tag = ArrowNodeTag__Int;
+			attr->arrow_type.Int.bitWidth = 32;
+			attr->arrow_type.Int.is_signed = false;
 			attr->put_value = put_inline_32b_value;
 		}
 		else if (attr->attlen == sizeof(uint64))
 		{
-			attr->garrow_type = GARROW_TYPE_UINT64;
+			attr->arrow_type.tag = ArrowNodeTag__Int;
+			attr->arrow_type.Int.bitWidth = 64;
+			attr->arrow_type.Int.is_signed = false;
 			attr->put_value = put_inline_64b_value;
 		}
 		else
 		{
-			attr->garrow_type = GARROW_TYPE_BINARY;
+			attr->arrow_type.tag = ArrowNodeTag__FixedSizeBinary;
+			attr->arrow_type.FixedSizeBinary.byteWidth = attr->attlen;
+			//FIXME: Is it right handler??
 			attr->put_value = put_variable_value;
 		}
 	}
 	else if (attr->attlen == -1)
 	{
-		attr->garrow_type = GARROW_TYPE_BINARY;
+		attr->arrow_type.tag = ArrowNodeTag__Binary;
 		attr->put_value = put_variable_value;
 	}
 	else
@@ -890,47 +916,18 @@ pgsql_append_results(SQLtable *table, PGresult *res)
 static void
 pgsql_dump_attribute(SQLattribute *attr, const char *label, int indent)
 {
-	const char *garrow_type;
 	int		j;
-
-	switch (attr->garrow_type)
-	{
-		case GARROW_TYPE_BOOLEAN:    garrow_type = "boolean";    break;
-		case GARROW_TYPE_UINT8:      garrow_type = "uint8";      break;
-		case GARROW_TYPE_INT8:       garrow_type = "int8";       break;
-		case GARROW_TYPE_UINT16:     garrow_type = "uint16";     break;
-		case GARROW_TYPE_INT16:      garrow_type = "int16";      break;
-		case GARROW_TYPE_UINT32:     garrow_type = "uint32";     break;
-		case GARROW_TYPE_INT32:      garrow_type = "int32";      break;
-		case GARROW_TYPE_UINT64:     garrow_type = "uint64";     break;
-		case GARROW_TYPE_INT64:      garrow_type = "int64";      break;
-		case GARROW_TYPE_HALF_FLOAT: garrow_type = "float2";     break;
-		case GARROW_TYPE_FLOAT:      garrow_type = "float4";     break;
-		case GARROW_TYPE_DOUBLE:     garrow_type = "float8";     break;
-		case GARROW_TYPE_STRING:     garrow_type = "string";     break;
-		case GARROW_TYPE_BINARY:     garrow_type = "binary";     break;
-		case GARROW_TYPE_DATE32:     garrow_type = "date32";     break;
-		case GARROW_TYPE_DATE64:     garrow_type = "date64";     break;
-		case GARROW_TYPE_TIMESTAMP:  garrow_type = "timestamp";  break;
-		case GARROW_TYPE_TIME32:     garrow_type = "time32";     break;
-		case GARROW_TYPE_TIME64:     garrow_type = "time64";     break;
-		case GARROW_TYPE_INTERVAL:   garrow_type = "interval";   break;
-		case GARROW_TYPE_DECIMAL:    garrow_type = "decimal";    break;
-		case GARROW_TYPE_LIST:       garrow_type = "list";       break;
-		case GARROW_TYPE_STRUCT:     garrow_type = "struct";     break;
-		case GARROW_TYPE_UNION:      garrow_type = "union";      break;
-		case GARROW_TYPE_DICTIONARY: garrow_type = "dictionary"; break;
-		default:   garrow_type = "unknown"; break;
-	}
 
 	for (j=0; j < indent; j++)
 		putchar(' ');
 	printf("%s {attname='%s', atttypid=%u, atttypmod=%d, attlen=%d,"
-		   " attbyval=%s, attalign=%d, typtype=%c, arrow(%s)}\n",
+		   " attbyval=%s, attalign=%d, typtype=%c, arrow_type=",
 		   label,
 		   attr->attname, attr->atttypid, attr->atttypmod, attr->attlen,
-		   attr->attbyval ? "true" : "false", attr->attalign, attr->typtype,
-		   garrow_type);
+		   attr->attbyval ? "true" : "false", attr->attalign, attr->typtype);
+	dumpArrowNode((ArrowNode *)&attr->arrow_type, stdout);
+	printf("}\n");
+
 	if (attr->typtype == 'b')
 	{
 		if (attr->elemtype)

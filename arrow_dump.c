@@ -202,7 +202,7 @@ dumpArrowRecordBatch(ArrowRecordBatch *node, FILE *out)
 {
 	int		i;
 
-	fprintf(out, "{RecordBatch : length=%ld, nodes=[",
+	fprintf(out, "{RecordBatch: length=%ld, nodes=[",
 			node->length);
 	for (i=0; i < node->_num_nodes; i++)
 	{
