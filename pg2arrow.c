@@ -18,7 +18,6 @@ static void      pgsql_end_query(PGconn *conn);
 static char	   *sql_command = NULL;
 static char	   *output_filename = NULL;
 static size_t	batch_segment_sz = 0;
-static size_t	batch_num_rows = 0;
 static int		dictionary_compression = 0;
 static char	   *pgsql_hostname = NULL;
 static char	   *pgsql_portno = NULL;
@@ -39,11 +38,11 @@ usage(void)
 		  "  -f, --file=FILENAME     SQL command from file\n"
 		  "      (-c and -f are exclusive, either of them must be specified)\n"
 		  "  -o, --output=FILENAME   result file in Apache Arrow format\n"
+		  "      (default creates a temporary file)\n"
 		  "\n"
 		  "Arrow format options:\n"
-		  "  -s, --segment-size=SIZE batch size by segment size\n"
-		  "  -n, --num-rows=NUM      batch size by number of rows\n"
-		  "      (-s and -n are exclusive, default is 1GB by segment size)\n"
+		  "  -s, --segment-size=SIZE size of record batch for each\n"
+		  "      (default is 512MB)\n"
 		  "  -D, --dictionary        enables dictionary compression\n"
 		  "\n"
 		  "Connection options:\n"
@@ -70,7 +69,6 @@ parse_options(int argc, char * const argv[])
 		{"file",         required_argument,  NULL,  'f' },
 		{"output",       required_argument,  NULL,  'o' },
 		{"segment-size", required_argument,  NULL,  's' },
-		{"num-rows",     required_argument,  NULL,  'n' },
 		{"dictionary",   no_argument,        NULL,  'D' },
 		{"host",         required_argument,  NULL,  'h' },
 		{"port",         required_argument,  NULL,  'p' },
@@ -116,8 +114,6 @@ parse_options(int argc, char * const argv[])
 			case 's':
 				if (batch_segment_sz != 0)
 					Elog("-s option specified twice");
-				if (batch_num_rows != 0)
-					Elog("-s and -n options are exclusive");
 				pos = optarg;
 				while (isdigit(*pos))
 					pos++;
@@ -134,16 +130,6 @@ parse_options(int argc, char * const argv[])
 					batch_segment_sz = atol(optarg) * (1UL << 30);
 				else
 					Elog("segment size is not valid: %s", optarg);
-				break;
-			case 'n':
-				if (batch_num_rows != 0)
-					Elog("-n option specified twice");
-				if (batch_segment_sz != 0)
-					Elog("-s and -n options are exclusive");
-				for (pos = optarg; isdigit(*pos); pos++);
-				if (*pos != '\0')
-					Elog("wrond number of rows: %s", optarg);
-				batch_num_rows = atol(optarg);
 				break;
 			case 'D':
 				dictionary_compression = 1;
@@ -209,7 +195,7 @@ parse_options(int argc, char * const argv[])
 		exit(0);
 	}
 
-	if (batch_segment_sz == 0 && batch_num_rows == 0)
+	if (batch_segment_sz == 0)
 		batch_segment_sz = (1UL << 29);		/* 512MB in default */
 	if (!output_filename)
 		Elog("-o, --output=FILENAME option is missing");
@@ -365,12 +351,6 @@ pgsql_end_query(PGconn *conn)
 	PQclear(res);
 }
 
-
-
-
-
-
-
 /*
  * Entrypoint of pg2arrow
  */
@@ -387,9 +367,7 @@ int main(int argc, char * const argv[])
 	res = pgsql_begin_query(conn, sql_command);
 	if (!res)
 		Elog("SQL command returned an empty result");
-	table = pgsql_create_buffer(conn, res,
-								batch_segment_sz,
-								batch_num_rows);
+	table = pgsql_create_buffer(conn, res, batch_segment_sz);
 	table->filename = output_filename;
 	do {
 		pgsql_append_results(table, res);

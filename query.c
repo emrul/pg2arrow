@@ -746,20 +746,17 @@ pgsql_create_array_element(PGconn *conn, Oid array_elemid)
 	return attr;
 }
 
-
 /*
  * pgsql_create_buffer
  */
 SQLtable *
-pgsql_create_buffer(PGconn *conn, PGresult *res,
-					size_t segment_sz, size_t nrooms)
+pgsql_create_buffer(PGconn *conn, PGresult *res, size_t segment_sz)
 {
 	int			j, nfields = PQnfields(res);
 	SQLtable   *table;
 
 	table = pg_zalloc(offsetof(SQLtable, attrs[nfields]));
 	table->segment_sz = segment_sz;
-	table->nrooms = nrooms;
 	table->nitems = 0;
 	table->nfields = nfields;
 	for (j=0; j < nfields; j++)
@@ -890,23 +887,26 @@ pgsql_append_results(SQLtable *table, PGresult *res)
 			usage += attr->put_value(attr, table->nitems, addr, sz);
 		}
 		/* check threshold to write out */
-		if (table->nrooms > 0)
+		if (usage > table->segment_sz)
 		{
-			table->nitems++;
-			if (table->nitems >= table->nrooms)
-				pgsql_writeout_buffer(table);
-		}
-		else if (table->segment_sz > 0)
-		{
-			if (usage > table->segment_sz)
+			if (table->nitems == 0)
+				Elog("A result is larger than size of record batch");
+			/* fixup NULL-count if last row updated it */
+			for (j=0; j < nfields; j++)
 			{
-				pgsql_writeout_buffer(table);
-				goto retry;
+				SQLattribute   *attr = &table->attrs[j];
+
+				if (PQgetisnull(res, i, j))
+				{
+					assert(attr->nullcount > 0);
+					attr->nullcount--;
+				}
 			}
-			table->nitems++;
+			/* write out the bunch of query results */
+			pgsql_writeout_buffer(table);
+			goto retry;
 		}
-		else
-			Elog("Bug? unexpected SQLtable state");
+		table->nitems++;
 	}
 }
 
@@ -957,11 +957,9 @@ pgsql_dump_buffer(SQLtable *table)
 
 	printf("Dump of SQL buffer:\n"
 		   "nfields: %d\n"
-		   "nitems: %zu\n"
-		   "nrooms: %zu\n",
+		   "nitems: %zu\n",
 		   table->nfields,
-		   table->nitems,
-		   table->nrooms);
+		   table->nitems);
 	for (j=0; j < table->nfields; j++)
 	{
 		snprintf(label, sizeof(label), "attr[%d]", j);

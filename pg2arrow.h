@@ -64,7 +64,6 @@ struct SQLtable
 {
 	const char *filename;		/* XXX output filename */
 	size_t		segment_sz;		/* threshold of the memory usage */
-	size_t		nrooms;			/* threshold of the nitems */
 	size_t		nitems;			/* current number of rows */
 	int			nfields;		/* number of attributes */
 	SQLattribute attrs[1];		/* flexible length */
@@ -72,10 +71,13 @@ struct SQLtable
 
 /* buffer */
 SQLtable   *pgsql_create_buffer(PGconn *conn, PGresult *res,
-								size_t segment_sz, size_t nrooms);
+								size_t segment_sz);
 void		pgsql_append_results(SQLtable *table, PGresult *res);
 void        pgsql_writeout_buffer(SQLtable *table);
 void		pgsql_dump_buffer(SQLtable *table);
+
+/* arrow_write.c */
+
 
 /* arrow_read.c */
 void		readArrowFile(const char *pathname);
