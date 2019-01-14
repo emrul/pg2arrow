@@ -11,6 +11,12 @@
 #define atooid(x)		((Oid) strtoul((x), NULL, 10))
 #define InvalidOid		((Oid) 0)
 
+/* forward declarations */
+static SQLtable *
+pgsql_create_composite_type(PGconn *conn, Oid comptype_relid);
+static SQLattribute *
+pgsql_create_array_element(PGconn *conn, Oid array_elemid);
+
 static inline bool
 pg_strtobool(const char *v)
 {
@@ -405,10 +411,39 @@ put_composite_value(SQLattribute *attr, int row_index,
 	return usage;
 }
 
-static SQLtable *pgsql_create_composite_type(PGconn *conn,
-											 Oid comptype_relid);
-static SQLattribute *pgsql_create_array_element(PGconn *conn,
-												Oid array_elemid);
+#define STAT_UPDATE_INLINE_TEMPLATE(TYPENAME,TO_DATUM)			\
+	static void													\
+	stat_update_##TYPENAME##_value(SQLattribute *attr,			\
+								   const char *addr, int sz)	\
+	{															\
+		TYPENAME		value;									\
+																\
+		if (!addr)												\
+			return;												\
+		value = *((const TYPENAME *)addr);						\
+		if (attr->min_isnull)									\
+		{														\
+			attr->min_isnull = false;							\
+			attr->min_value  = TO_DATUM(value);					\
+		}														\
+		else if (value < attr->min_value)						\
+			attr->min_value = value;							\
+																\
+		if (attr->max_isnull)									\
+		{														\
+			attr->max_isnull = false;							\
+			attr->max_value  = TO_DATUM(value);					\
+		}														\
+		else if (value > attr->max_value)						\
+			attr->max_value = value;							\
+	}
+
+STAT_UPDATE_INLINE_TEMPLATE(int8,   Int8GetDatum)
+STAT_UPDATE_INLINE_TEMPLATE(int16,  Int16GetDatum)
+STAT_UPDATE_INLINE_TEMPLATE(int32,  Int32GetDatum)
+STAT_UPDATE_INLINE_TEMPLATE(int64,  Int64GetDatum)
+STAT_UPDATE_INLINE_TEMPLATE(float4, Float4GetDatum)
+STAT_UPDATE_INLINE_TEMPLATE(float8, Float8GetDatum)
 
 /*
  * attribute_assign_type_handler
@@ -438,6 +473,7 @@ attribute_assign_type_handler(SQLattribute *attr,
 		{
 			attr->arrow_type.tag = ArrowNodeTag__Bool;
 			attr->put_value = put_inline_8b_value;
+			attr->stat_update = stat_update_int8_value;
 			return;
 		}
 		else if (strcmp(typname, "int2") == 0)
@@ -446,6 +482,7 @@ attribute_assign_type_handler(SQLattribute *attr,
 			attr->arrow_type.Int.bitWidth = 16;
 			attr->arrow_type.Int.is_signed = true;
 			attr->put_value = put_inline_16b_value;
+			attr->stat_update = stat_update_int16_value;
 		}
 		else if (strcmp(typname, "int4") == 0)
 		{
@@ -453,6 +490,7 @@ attribute_assign_type_handler(SQLattribute *attr,
 			attr->arrow_type.Int.bitWidth = 32;
 			attr->arrow_type.Int.is_signed = true;
 			attr->put_value = put_inline_32b_value;
+			attr->stat_update = stat_update_int32_value;
 		}
 		else if (strcmp(typname, "int8") == 0)
 		{
@@ -460,24 +498,28 @@ attribute_assign_type_handler(SQLattribute *attr,
 			attr->arrow_type.Int.bitWidth = 64;
 			attr->arrow_type.Int.is_signed = true;
 			attr->put_value = put_inline_64b_value;
+			attr->stat_update = stat_update_int64_value;
 		}
 		else if (strcmp(typname, "float4") == 0)
 		{
 			attr->arrow_type.tag = ArrowNodeTag__FloatingPoint;
 			attr->arrow_type.FloatingPoint.precision = 32;
 			attr->put_value = put_inline_32b_value;
+			attr->stat_update = stat_update_float4_value;
 		}
 		else if (strcmp(typname, "float8") == 0)
 		{
 			attr->arrow_type.tag = ArrowNodeTag__FloatingPoint;
 			attr->arrow_type.FloatingPoint.precision = 64;
 			attr->put_value = put_inline_64b_value;
+			attr->stat_update = stat_update_float8_value;
 		}
 		else if (strcmp(typname, "date") == 0)
 		{
 			attr->arrow_type.tag = ArrowNodeTag__Date;
 			attr->arrow_type.Date.unit = ArrowDateUnit__Day;
 			attr->put_value = put_date_value;
+			attr->stat_update = stat_update_int32_value;
 		}
 		else if (strcmp(typname, "time") == 0)
 		{
@@ -485,12 +527,14 @@ attribute_assign_type_handler(SQLattribute *attr,
 			attr->arrow_type.Time.unit = ArrowTimeUnit__MicroSecond;
 			attr->arrow_type.Time.bitWidth = 64;
 			attr->put_value = put_inline_64b_value;
+			attr->stat_update = stat_update_int64_value;
 		}
 		else if (strcmp(typname, "timestamp") == 0)
 		{
 			attr->arrow_type.tag = ArrowNodeTag__Timestamp;
 			attr->arrow_type.Timestamp.unit = ArrowTimeUnit__MicroSecond;
 			attr->put_value = put_timestamp_value;
+			attr->stat_update = stat_update_int64_value;
 		}
 		else if (strcmp(typname, "text") == 0 ||
 				 strcmp(typname, "varchar") == 0 ||
@@ -627,6 +671,11 @@ pgsql_setup_attribute(PGconn *conn,
 		Elog("unknown state pf typtype: %c", typtype);
 
 	attribute_assign_type_handler(attr, nspname, typname);
+	/* init statistics */
+	attr->min_isnull = true;
+	attr->max_isnull = true;
+	attr->min_value  = 0UL;
+	attr->max_value  = 0UL;
 }
 
 /*
@@ -834,6 +883,11 @@ pgsql_clear_attribute(SQLattribute *attr)
 	}
 	if (attr->elemtype)
 		pgsql_clear_attribute(attr->elemtype);
+	/* clear statistics */
+	attr->min_isnull = true;
+	attr->max_isnull = true;
+	attr->min_value  = 0UL;
+	attr->max_value  = 0UL;
 }
 
 /*
@@ -890,7 +944,7 @@ pgsql_append_results(SQLtable *table, PGresult *res)
 		if (usage > table->segment_sz)
 		{
 			if (table->nitems == 0)
-				Elog("A result is larger than size of record batch");
+				Elog("A result row is larger than size of record batch!!");
 			/* fixup NULL-count if last row updated it */
 			for (j=0; j < nfields; j++)
 			{
@@ -905,6 +959,27 @@ pgsql_append_results(SQLtable *table, PGresult *res)
 			/* write out the bunch of query results */
 			pgsql_writeout_buffer(table);
 			goto retry;
+		}
+		/* update statistics */
+		for (j=0; j < nfields; j++)
+		{
+			SQLattribute   *attr = &table->attrs[j];
+			const char	   *addr;
+			size_t			sz;
+
+			if (!attr->stat_update)
+				continue;
+			if (PQgetisnull(res, i, j))
+			{
+				addr = NULL;
+				sz = 0;
+			}
+			else
+			{
+				addr = PQgetvalue(res, i, j);
+				sz = PQgetlength(res, i, j);
+			}
+			attr->stat_update(attr, addr, sz);
 		}
 		table->nitems++;
 	}

@@ -54,15 +54,23 @@ struct SQLattribute
 	/* data buffer */
 	size_t (*put_value)(SQLattribute *attr, int row_index,
 						const char *addr, int sz);
+	void   (*stat_update)(SQLattribute *attr,
+						  const char *addr, int sz);
 	long		nullcount;		/* number of null values */
 	SQLbuffer	nullmap;		/* null bitmap */
 	SQLbuffer	values;			/* main storage of values */
 	SQLbuffer	extra;			/* extra buffer for varlena */
+	/* statistics */
+	bool		min_isnull;
+	bool		max_isnull;
+	Datum		min_value;
+	Datum		max_value;
 };
 
 struct SQLtable
 {
-	const char *filename;		/* XXX output filename */
+	const char *filename;		/* output filename */
+	int			fdesc;			/* output file descriptor */
 	size_t		segment_sz;		/* threshold of the memory usage */
 	size_t		nitems;			/* current number of rows */
 	int			nfields;		/* number of attributes */

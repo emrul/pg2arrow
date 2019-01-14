@@ -194,11 +194,8 @@ parse_options(int argc, char * const argv[])
 		readArrowFile(dump_arrow_filename);
 		exit(0);
 	}
-
 	if (batch_segment_sz == 0)
 		batch_segment_sz = (1UL << 29);		/* 512MB in default */
-	if (!output_filename)
-		Elog("-o, --output=FILENAME option is missing");
 	if (sql_file)
 	{
 		int			fdesc;
@@ -368,7 +365,29 @@ int main(int argc, char * const argv[])
 	if (!res)
 		Elog("SQL command returned an empty result");
 	table = pgsql_create_buffer(conn, res, batch_segment_sz);
-	table->filename = output_filename;
+	/* open the output file */
+	if (output_filename)
+	{
+		table->fdesc = open(output_filename, O_RDWR | O_CREAT);
+		if (table->fdesc < 0)
+			Elog("failed to open '%s'", output_filename);
+		table->filename = output_filename;
+	}
+	else
+	{
+		char	temp_filename[128];
+
+		strcpy(temp_filename, "/tmp/XXXXXX.arrow");
+		table->fdesc = mkostemps(temp_filename, 6, O_RDWR | O_CREAT);
+		if (table->fdesc < 0)
+			Elog("failed to open '%s' : %m", temp_filename);
+		table->filename = pg_strdup(temp_filename);
+		fprintf(stderr,
+				"notice: -o, --output=FILENAME options was not specified,\n"
+				"        so, a temporary file '%s' was built instead.\n",
+				temp_filename);
+	}
+
 	do {
 		pgsql_append_results(table, res);
 		PQclear(res);
@@ -378,6 +397,7 @@ int main(int argc, char * const argv[])
 	if (table->nitems > 0)
 		pgsql_writeout_buffer(table);
 
+	//pgsql_writeout_footer(...);
 	//pgsql_dump_buffer(table);
 	return 0;
 }
