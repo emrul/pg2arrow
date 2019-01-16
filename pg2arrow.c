@@ -209,7 +209,7 @@ parse_options(int argc, char * const argv[])
 			Elog("failed on open '%s': %m", sql_file);
 		if (fstat(fdesc, &st_buf) != 0)
 			Elog("failed on fstat(2) on '%s': %m", sql_file);
-		buffer = pg_malloc(st_buf.st_size + 1);
+		buffer = palloc(st_buf.st_size + 1);
 		while (offset < st_buf.st_size)
 		{
 			nbytes = read(fdesc, buffer + offset, st_buf.st_size - offset);
@@ -301,7 +301,7 @@ pgsql_begin_query(PGconn *conn, const char *query)
 	PQclear(res);
 
 	/* declare cursor */
-	buffer = pg_malloc(strlen(query) + 2048);
+	buffer = palloc(strlen(query) + 2048);
 	sprintf(buffer, "DECLARE %s BINARY CURSOR FOR %s", CURSOR_NAME, query);
 	res = PQexec(conn, buffer);
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
@@ -381,7 +381,7 @@ int main(int argc, char * const argv[])
 		table->fdesc = mkostemps(temp_filename, 6, O_RDWR | O_CREAT);
 		if (table->fdesc < 0)
 			Elog("failed to open '%s' : %m", temp_filename);
-		table->filename = pg_strdup(temp_filename);
+		table->filename = pstrdup(temp_filename);
 		fprintf(stderr,
 				"notice: -o, --output=FILENAME options was not specified,\n"
 				"        so, a temporary file '%s' was built instead.\n",

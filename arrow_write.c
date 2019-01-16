@@ -34,9 +34,9 @@ allocFBTableBuf(int nattrs)
 										 vtable.offset[nattrs]));
 	size_t		len2 = MAXALIGN(sizeof(int32) +
 								sizeof(Datum) * nattrs);
-	buf = pg_zalloc(len1 + len2);
-	buf->extra_buf		= pg_zalloc(sizeof(void *) * nattrs);
-	buf->extra_sz		= pg_zalloc(sizeof(int) * nattrs);
+	buf = palloc0(len1 + len2);
+	buf->extra_buf		= palloc0(sizeof(void *) * nattrs);
+	buf->extra_sz		= palloc0(sizeof(int) * nattrs);
 	buf->nattrs			= nattrs;
 	buf->length			= -1;	/* not flatten yet */
 	buf->table			= (int32 *)((char *)buf + len2);
@@ -122,7 +122,7 @@ addBufferString(FBTableBuf *buf, int index, const char *cstring)
 	if (cstring && (slen = strlen(cstring)) > 0)
 	{
 		blen = sizeof(int32) + INTALIGN(slen + 1);
-		temp = pg_zalloc(blen);
+		temp = palloc0(blen);
 		*((int32 *)temp) = slen;
 		strcpy(temp + sizeof(int32), cstring);
 		__addBufferBinary(buf, index, temp, blen, 0);
@@ -162,7 +162,7 @@ addBufferVector(FBTableBuf *buf, int index, int nitems, FBTableBuf **elements)
 
 		len += MAXALIGN(e->length) + MAXIMUM_ALIGNOF; /* with margin */
 	}
-	vector = pg_zalloc(len);
+	vector = palloc0(len);
 	vector[0] = nitems;
 	pos = (char *)&vector[1 + nitems];
 	for (i=0; i < nitems; i++)
@@ -214,7 +214,7 @@ makeBufferFlatten(FBTableBuf *buf)
 		buf->length = base_sz;
 	else
 	{
-		buf = pg_realloc(buf, base_sz + extra_sz);
+		buf = repalloc(buf, base_sz + extra_sz);
 		buf->table = (int32 *)((char *)&buf->vtable + buf->vtable.vlen);
 		/* note that we may inject gap space if vlen is not INT aligned */
 		pos = (char *)&buf->vtable + INTALIGN(base_sz);
@@ -300,7 +300,7 @@ addBufferArrowBufferVector(FBTableBuf *buf, int index,
 	size_t		length = offsetof(ArrowBufferVector, buffers[nitems]);
 	int			i;
 
-	vector = pg_zalloc(length);
+	vector = palloc0(length);
 	vector->nitems = nitems;
 	for (i=0; i < nitems; i++)
 	{
@@ -330,7 +330,7 @@ addBufferArrowFieldNodeVector(FBTableBuf *buf, int index,
 	size_t		length = offsetof(ArrowFieldNodeVector, nodes[nitems]);
 	int			i;
 
-	vector = pg_zalloc(length);
+	vector = palloc0(length);
 	vector->nitems = nitems;
 	for (i=0; i < nitems; i++)
 	{
@@ -518,7 +518,7 @@ addBufferArrowBlockVector(FBTableBuf *buf, int index,
 	size_t		length = offsetof(ArrowBlockVector, blocks[nitems]);
 	int			i;
 
-	vector = pg_zalloc(length);
+	vector = palloc0(length);
     vector->nitems = nitems;
     for (i=0; i < nitems; i++)
 	{

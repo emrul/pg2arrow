@@ -627,7 +627,7 @@ pgsql_setup_attribute(PGconn *conn,
 					  const char *nspname,
 					  const char *typname)
 {
-	attr->attname   = pg_strdup(attname);
+	attr->attname   = pstrdup(attname);
 	attr->atttypid  = atttypid;
 	attr->atttypmod = atttypmod;
 	attr->attlen    = attlen;
@@ -705,7 +705,7 @@ pgsql_create_composite_type(PGconn *conn, Oid comptype_relid)
 			 PQresultErrorMessage(res));
 
 	nfields = PQntuples(res);
-	table = pg_zalloc(offsetof(SQLtable, attrs[nfields]));
+	table = palloc0(offsetof(SQLtable, attrs[nfields]));
 	table->nfields = nfields;
 	for (j=0; j < nfields; j++)
 	{
@@ -744,7 +744,7 @@ pgsql_create_composite_type(PGconn *conn, Oid comptype_relid)
 static SQLattribute *
 pgsql_create_array_element(PGconn *conn, Oid array_elemid)
 {
-	SQLattribute   *attr = pg_zalloc(sizeof(SQLattribute));
+	SQLattribute   *attr = palloc0(sizeof(SQLattribute));
 	PGresult	   *res;
 	char			query[4096];
 	const char     *nspname;
@@ -804,7 +804,7 @@ pgsql_create_buffer(PGconn *conn, PGresult *res, size_t segment_sz)
 	int			j, nfields = PQnfields(res);
 	SQLtable   *table;
 
-	table = pg_zalloc(offsetof(SQLtable, attrs[nfields]));
+	table = palloc0(offsetof(SQLtable, attrs[nfields]));
 	table->segment_sz = segment_sz;
 	table->nitems = 0;
 	table->nfields = nfields;

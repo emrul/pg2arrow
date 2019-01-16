@@ -213,7 +213,7 @@ readArrowTypeUnion(ArrowTypeUnion *node, const char *pos)
 		node->typeIds = NULL;
 	else
 	{
-		node->typeIds = pg_zalloc(sizeof(int32) * nitems);
+		node->typeIds = palloc0(sizeof(int32) * nitems);
 		memcpy(node->typeIds, vector, sizeof(int32) * nitems);
 	}
 	node->_num_typeIds = nitems;
@@ -360,7 +360,7 @@ readArrowField(ArrowField *field, const char *pos)
 	vector = fetchVector(&t, 5, &nitems);
 	if (nitems > 0)
 	{
-		field->children = pg_zalloc(sizeof(ArrowField) * nitems);
+		field->children = palloc0(sizeof(ArrowField) * nitems);
 		for (i=0; i < nitems; i++)
 		{
 			int		offset = vector[i];
@@ -377,7 +377,7 @@ readArrowField(ArrowField *field, const char *pos)
 	vector = fetchVector(&t, 6, &nitems);
 	if (nitems > 0)
 	{
-		field->custom_metadata = pg_zalloc(sizeof(ArrowKeyValue) * nitems);
+		field->custom_metadata = palloc0(sizeof(ArrowKeyValue) * nitems);
 		for (i=0; i < nitems; i++)
 		{
 			int		offset = vector[i];
@@ -405,7 +405,7 @@ readArrowSchema(ArrowSchema *schema, const char *pos)
 	vector = fetchVector(&t, 1, &nitems);
 	if (nitems > 0)
 	{
-		schema->fields = pg_zalloc(sizeof(ArrowField) * nitems);
+		schema->fields = palloc0(sizeof(ArrowField) * nitems);
 		for (i=0; i < nitems; i++)
 		{
 			int		offset = vector[i];
@@ -422,7 +422,7 @@ readArrowSchema(ArrowSchema *schema, const char *pos)
 	vector = fetchVector(&t, 2, &nitems);
 	if (nitems > 0)
 	{
-		schema->custom_metadata = pg_zalloc(sizeof(ArrowKeyValue) * nitems);
+		schema->custom_metadata = palloc0(sizeof(ArrowKeyValue) * nitems);
 		for (i=0; i < nitems; i++)
 		{
 			int		offset = vector[i];
@@ -484,7 +484,7 @@ readArrowRecordBatch(ArrowRecordBatch *rbatch, const char *pos)
 	next = (const char *)fetchVector(&t, 1, &nitems);
 	if (nitems > 0)
 	{
-		rbatch->nodes = pg_zalloc(sizeof(ArrowFieldNode) * nitems);
+		rbatch->nodes = palloc0(sizeof(ArrowFieldNode) * nitems);
 		for (i=0; i < nitems; i++)
 			next += readArrowFieldNode(&rbatch->nodes[i], next);
 	}
@@ -494,7 +494,7 @@ readArrowRecordBatch(ArrowRecordBatch *rbatch, const char *pos)
 	next = (const char *)fetchVector(&t, 2, &nitems);
 	if (nitems > 0)
 	{
-		rbatch->buffers = pg_zalloc(sizeof(ArrowBuffer) * nitems);
+		rbatch->buffers = palloc0(sizeof(ArrowBuffer) * nitems);
 		for (i=0; i < nitems; i++)
 			next += readArrowBuffer(&rbatch->buffers[i], next);
 	}
@@ -596,7 +596,7 @@ readArrowFooter(ArrowFooter *node, const char *pos)
 	next = (const char *)fetchVector(&t, 2, &nitems);
 	if (nitems > 0)
 	{
-		node->dictionaries = pg_zalloc(sizeof(ArrowBlock) * nitems);
+		node->dictionaries = palloc0(sizeof(ArrowBlock) * nitems);
 		for (i=0; i < nitems; i++)
 			next += readArrowBlock(&node->dictionaries[i], next);
 		node->_num_dictionaries = nitems;
@@ -606,7 +606,7 @@ readArrowFooter(ArrowFooter *node, const char *pos)
 	next = (const char *)fetchVector(&t, 3, &nitems);
 	if (nitems > 0)
 	{
-		node->recordBatches = pg_zalloc(sizeof(ArrowBlock) * nitems);
+		node->recordBatches = palloc0(sizeof(ArrowBlock) * nitems);
 		for (i=0; i < nitems; i++)
 			next += readArrowBlock(&node->recordBatches[i], next);
 		node->_num_recordBatches = nitems;
