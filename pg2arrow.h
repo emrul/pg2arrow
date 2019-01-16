@@ -78,19 +78,21 @@ struct SQLtable
 };
 
 /* buffer */
-SQLtable   *pgsql_create_buffer(PGconn *conn, PGresult *res,
+extern SQLtable	   *pgsql_create_buffer(PGconn *conn, PGresult *res,
 								size_t segment_sz);
-void		pgsql_append_results(SQLtable *table, PGresult *res);
-void        pgsql_writeout_buffer(SQLtable *table);
-void		pgsql_dump_buffer(SQLtable *table);
+extern void			pgsql_append_results(SQLtable *table, PGresult *res);
+extern void 		pgsql_writeout_buffer(SQLtable *table);
+extern void			pgsql_dump_buffer(SQLtable *table);
 
 /* arrow_write.c */
-
+extern void			writeArrowRecordBatch(SQLtable *table);
+extern void			writeArrowSchema(SQLtable *table);
+extern void			writeArrowFooter(SQLtable *table);
 
 /* arrow_read.c */
-void		readArrowFile(const char *pathname);
+extern void			readArrowFile(const char *pathname);
 /* arrow_dump.c */
-void		dumpArrowNode(ArrowNode *node, FILE *out);
+extern void			dumpArrowNode(ArrowNode *node, FILE *out);
 
 /*
  * Error message and exit
@@ -125,6 +127,16 @@ pg_zalloc(size_t sz)
 	return ptr;
 }
 
+static inline void *
+pg_realloc(void *ptr, size_t sz)
+{
+	void   *result = realloc(ptr, sz);
+
+	if (!result)
+		Elog("out of memory");
+	return result;
+}
+
 static inline char *
 pg_strdup(const char *str)
 {
@@ -134,4 +146,11 @@ pg_strdup(const char *str)
 		Elog("out of memory");
 	return temp;
 }
+
+static inline void
+pg_free(void *ptr)
+{
+	free(ptr);
+}
+
 #endif	/* PG2ARROW_H */

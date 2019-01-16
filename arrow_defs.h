@@ -159,7 +159,7 @@ typedef struct
 typedef ArrowNode	ArrowTypeNull;
 
 /* Int */
-typedef struct
+typedef struct		ArrowTypeInt
 {
 	ArrowNodeTag	tag;
 	int32			bitWidth;
@@ -167,7 +167,7 @@ typedef struct
 } ArrowTypeInt;
 
 /* FloatingPoint */
-typedef struct
+typedef struct		ArrowTypeFloatingPoint
 {
 	ArrowNodeTag	tag;
 	ArrowPrecision	precision;
@@ -183,7 +183,7 @@ typedef ArrowNode	ArrowTypeBinary;
 typedef ArrowNode	ArrowTypeBool;
 
 /* Decimal */
-typedef struct
+typedef struct		ArrowTypeDecimal
 {
 	ArrowNodeTag	tag;
 	int32			precision;
@@ -191,14 +191,14 @@ typedef struct
 } ArrowTypeDecimal;
 
 /* Date */
-typedef struct
+typedef struct		ArrowTypeDate
 {
 	ArrowNodeTag	tag;
 	ArrowDateUnit	unit;
 } ArrowTypeDate;
 
 /* Time */
-typedef struct
+typedef struct		ArrowTypeTime
 {
 	ArrowNodeTag	tag;
 	ArrowTimeUnit	unit;
@@ -206,7 +206,7 @@ typedef struct
 } ArrowTypeTime;
 
 /* Timestamp */
-typedef struct
+typedef struct		ArrowTypeTimestamp
 {
 	ArrowNodeTag	tag;
 	ArrowTimeUnit	unit;
@@ -215,7 +215,7 @@ typedef struct
 } ArrowTypeTimestamp;
 
 /* Interval */
-typedef struct
+typedef struct		ArrowTypeInterval
 {
 	ArrowNodeTag	tag;
 	ArrowIntervalUnit unit;
@@ -228,7 +228,7 @@ typedef ArrowNode	ArrowTypeList;
 typedef ArrowNode	ArrowTypeStruct;
 
 /* Union */
-typedef struct
+typedef struct		ArrowTypeUnion
 {
 	ArrowNodeTag	tag;
 	ArrowUnionMode	mode;
@@ -237,21 +237,21 @@ typedef struct
 } ArrowTypeUnion;
 
 /* FixedSizeBinary */
-typedef struct
+typedef struct		ArrowTypeFixedSizeBinary
 {
 	ArrowNodeTag	tag;
 	int32			byteWidth;
 } ArrowTypeFixedSizeBinary;
 
 /* FixedSizeList */
-typedef struct
+typedef struct		ArrowTypeFixedSizeList
 {
 	ArrowNodeTag	tag;
 	int32			listSize;
 } ArrowTypeFixedSizeList;
 
 /* Map */
-typedef struct
+typedef struct		ArrowTypeMap
 {
 	ArrowNodeTag	tag;
 	bool			keysSorted;
@@ -260,7 +260,7 @@ typedef struct
 /*
  * ArrowType
  */
-typedef union
+typedef union		ArrowType
 {
 	ArrowNodeTag			tag;
 	ArrowTypeNull			Null;
@@ -285,7 +285,7 @@ typedef union
 /*
  * Buffer
  */
-typedef struct
+typedef struct		ArrowBuffer
 {
 	ArrowNodeTag	tag;
 	int64			offset;
@@ -295,7 +295,7 @@ typedef struct
 /*
  * KeyValue
  */
-typedef struct
+typedef struct		ArrowKeyValue
 {
 	ArrowNodeTag	tag;
 	const char	   *key;
@@ -307,7 +307,7 @@ typedef struct
 /*
  * DictionaryEncoding
  */
-typedef struct
+typedef struct		ArrowDictionaryEncoding
 {
 	ArrowNodeTag	tag;
 	int64			id;
@@ -318,7 +318,7 @@ typedef struct
 /*
  * Field
  */
-typedef struct
+typedef struct		ArrowField
 {
 	ArrowNodeTag	tag;
 	const char	   *name;
@@ -327,7 +327,7 @@ typedef struct
 	ArrowType		type;
 	ArrowDictionaryEncoding dictionary;
 	/* vector of nested data types */
-	ArrowType	   *children;
+	struct ArrowField *children;
 	int				_num_children;
 	/* vector of user defined metadata */
 	ArrowKeyValue  *custom_metadata;
@@ -337,7 +337,7 @@ typedef struct
 /*
  * FieldNode
  */
-typedef struct
+typedef struct		ArrowFieldNode
 {
 	ArrowNodeTag	tag;
 	uint64			length;
@@ -347,7 +347,7 @@ typedef struct
 /*
  * Schema
  */
-typedef struct
+typedef struct		ArrowSchema
 {
 	ArrowNodeTag	tag;
 	ArrowEndianness	endianness;
@@ -362,7 +362,7 @@ typedef struct
 /*
  * RecordBatch
  */
-typedef struct
+typedef struct		ArrowRecordBatch
 {
 	ArrowNodeTag	tag;
 	int64			length;
@@ -377,7 +377,7 @@ typedef struct
 /*
  * DictionaryBatch 
  */
-typedef struct
+typedef struct		ArrowDictionaryBatch
 {
 	ArrowNodeTag	tag;
 	int64			id;
@@ -388,8 +388,9 @@ typedef struct
 /*
  * ArrowMessageHeader
  */
-typedef union
+typedef union		ArrowMessageHeader
 {
+	ArrowNodeTag	tag;
 	ArrowNode		node;
 	ArrowSchema		schema;
 	ArrowDictionaryBatch dictionaryBatch;
@@ -399,7 +400,7 @@ typedef union
 /*
  * Message
  */
-typedef struct
+typedef struct		ArrowMessage
 {
 	ArrowNodeTag	tag;
 	ArrowMetadataVersion version;
@@ -410,7 +411,7 @@ typedef struct
 /*
  * Block
  */
-typedef struct
+typedef struct		ArrowBlock
 {
 	ArrowNodeTag	tag;
 	int64			offset;
@@ -421,7 +422,7 @@ typedef struct
 /*
  * Footer
  */
-typedef struct
+typedef struct		ArrowFooter
 {
 	ArrowNodeTag	tag;
 	ArrowMetadataVersion version;

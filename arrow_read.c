@@ -32,9 +32,6 @@ typedef struct
 /* static variables/functions */
 static const char  *file_map_head;
 static const char  *file_map_tail;
-static void			__readArrowType(ArrowType *type,
-									int type_tag, const char *type_pos);
-
 
 static inline FBTable
 fetchFBTable(void *p_table)
@@ -247,7 +244,7 @@ readArrowTypeMap(ArrowTypeMap *node, const char *pos)
 }
 
 static void
-__readArrowType(ArrowType *type, int type_tag, const char *type_pos)
+readArrowType(ArrowType *type, int type_tag, const char *type_pos)
 {
 	memset(type, 0, sizeof(ArrowType));
 	switch (type_tag)
@@ -332,16 +329,6 @@ __readArrowType(ArrowType *type, int type_tag, const char *type_pos)
 }
 
 static void
-readArrowType(ArrowType *type, const char *pos)
-{
-	FBTable		t = fetchFBTable((int32 *)pos);
-	int			type_tag = fetchChar(&t, 0);
-	const char *type_pos = fetchOffset(&t, 1);
-
-	__readArrowType(type, type_tag, type_pos);
-}
-
-static void
 readArrowDictionaryEncoding(ArrowDictionaryEncoding *dict, const char *pos)
 {}
 
@@ -362,7 +349,7 @@ readArrowField(ArrowField *field, const char *pos)
 	/* type */
 	type_tag		= fetchChar(&t, 2);
 	type_pos		= fetchOffset(&t, 3);
-	__readArrowType(&field->type, type_tag, type_pos);
+	readArrowType(&field->type, type_tag, type_pos);
 
 	/* dictionary */
 	dict_pos = fetchOffset(&t, 4);
@@ -373,15 +360,15 @@ readArrowField(ArrowField *field, const char *pos)
 	vector = fetchVector(&t, 5, &nitems);
 	if (nitems > 0)
 	{
-		field->children = pg_zalloc(sizeof(ArrowType) * nitems);
+		field->children = pg_zalloc(sizeof(ArrowField) * nitems);
 		for (i=0; i < nitems; i++)
 		{
 			int		offset = vector[i];
 
 			if (offset == 0)
 				Elog("ArrowField has NULL-element in children[]");
-			readArrowType(&field->children[i],
-						  (const char *)&vector[i] + offset);
+			readArrowField(&field->children[i],
+						   (const char *)&vector[i] + offset);
 		}
 	}
 	field->_num_children = nitems;
