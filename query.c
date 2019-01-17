@@ -446,12 +446,12 @@ STAT_UPDATE_INLINE_TEMPLATE(float4, Float4GetDatum)
 STAT_UPDATE_INLINE_TEMPLATE(float8, Float8GetDatum)
 
 /*
- * attribute_assign_type_handler
+ * attribute_assign_arrow_type
  */
 static void
-attribute_assign_type_handler(SQLattribute *attr,
-							  const char *nspname,
-							  const char *typname)
+attribute_assign_arrow_type(SQLattribute *attr,
+							const char *nspname,
+							const char *typname)
 {
 	memset(&attr->arrow_type, 0, sizeof(ArrowType));
 	if (attr->subtypes)
@@ -459,6 +459,7 @@ attribute_assign_type_handler(SQLattribute *attr,
 		/* composite type */
 		attr->arrow_type.tag = ArrowNodeTag__Struct;
 		attr->put_value = put_composite_value;
+		Elog("composite in PostgreSQL / Struct in Arrow is not supported now");
 	}
 	else if (attr->elemtype)
 	{
@@ -644,6 +645,8 @@ pgsql_setup_attribute(PGconn *conn,
 	else
 		Elog("unknown state of attalign: %c", attalign);
 
+	attr->typnamespace = pstrdup(nspname);
+	attr->typname = pstrdup(typname);
 	attr->typtype = typtype;
 	if (typtype == 'b')
 	{
@@ -670,7 +673,7 @@ pgsql_setup_attribute(PGconn *conn,
 	else
 		Elog("unknown state pf typtype: %c", typtype);
 
-	attribute_assign_type_handler(attr, nspname, typname);
+	attribute_assign_arrow_type(attr, nspname, typname);
 	/* init statistics */
 	attr->min_isnull = true;
 	attr->max_isnull = true;

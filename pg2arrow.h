@@ -47,10 +47,12 @@ struct SQLattribute
 	short		attlen;
 	bool		attbyval;
 	uint8		attalign;		/* 1, 2, 4 or 8 */
-	char		typtype;		/* pg_type.typtype */
 	SQLtable   *subtypes;		/* valid, if composite type */
 	SQLattribute *elemtype;		/* valid, if array type */
-	ArrowType	arrow_type;		/* one of ArrowTypeXXXX */
+	const char *typnamespace;	/* name of pg_type.typnamespace */
+	const char *typname;		/* pg_type.typname */
+	char		typtype;		/* pg_type.typtype */
+	ArrowType	arrow_type;		/* type in apache arrow */
 	/* data buffer */
 	size_t (*put_value)(SQLattribute *attr, int row_index,
 						const char *addr, int sz);
@@ -86,7 +88,7 @@ extern void			pgsql_dump_buffer(SQLtable *table);
 
 /* arrow_write.c */
 extern void			writeArrowRecordBatch(SQLtable *table);
-extern void			writeArrowSchema(SQLtable *table);
+extern ssize_t		writeArrowSchema(SQLtable *table);
 extern void			writeArrowFooter(SQLtable *table);
 
 /* arrow_read.c */

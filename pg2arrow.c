@@ -356,6 +356,7 @@ int main(int argc, char * const argv[])
 	PGconn	   *conn;
 	PGresult   *res;
 	SQLtable   *table = NULL;
+	ssize_t		nbytes;
 
 	parse_options(argc, argv);
 	/* open PostgreSQL connection */
@@ -387,6 +388,12 @@ int main(int argc, char * const argv[])
 				"        so, a temporary file '%s' was built instead.\n",
 				temp_filename);
 	}
+	/* write header portion */
+	nbytes = write(table->fdesc, "ARROW1\0\0", 8);
+	if (nbytes != 8)
+		Elog("failed on write(2): %m");
+	nbytes = writeArrowSchema(table);
+
 
 	do {
 		pgsql_append_results(table, res);

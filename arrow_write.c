@@ -18,33 +18,33 @@ typedef struct
 typedef struct
 {
 	void	  **extra_buf;		/* external buffer */
-	int		   *extra_sz;
+	int32	   *extra_sz;
 	int32		nattrs;			/* number of variables */
-	int			length;			/* length of the flat image.
+	int32		length;			/* length of the flat image.
 								 * If -1, buffer is not flatten yet. */
-	int32	   *table;			/* table + inline/offset values */
 	FBVtable	vtable;
 } FBTableBuf;
 
 static FBTableBuf *
-allocFBTableBuf(int nattrs)
+__allocFBTableBuf(int nattrs, const char *func_name)
 {
 	FBTableBuf *buf;
-	size_t		len1 = MAXALIGN(offsetof(FBTableBuf,
-										 vtable.offset[nattrs]));
-	size_t		len2 = MAXALIGN(sizeof(int32) +
-								sizeof(Datum) * nattrs);
-	buf = palloc0(len1 + len2);
+	size_t		required = (MAXALIGN(offsetof(FBTableBuf,
+											  vtable.offset[nattrs])) +
+							MAXALIGN(sizeof(int32) +
+									 sizeof(Datum) * nattrs));
+	buf = palloc0(required);
 	buf->extra_buf		= palloc0(sizeof(void *) * nattrs);
 	buf->extra_sz		= palloc0(sizeof(int) * nattrs);
 	buf->nattrs			= nattrs;
 	buf->length			= -1;	/* not flatten yet */
-	buf->table			= (int32 *)((char *)buf + len2);
 	buf->vtable.vlen	= sizeof(int32);
 	buf->vtable.tlen	= sizeof(int32);
 
 	return buf;
 }
+#define allocFBTableBuf(a)						\
+	__allocFBTableBuf((a),__FUNCTION__)
 
 static void
 __addBufferScalar(FBTableBuf *buf, int index, void *ptr, int sz, int align)
@@ -57,14 +57,18 @@ __addBufferScalar(FBTableBuf *buf, int index, void *ptr, int sz, int align)
 		vtable->offset[index] = 0;
 	else
 	{
-		int		offset = TYPEALIGN(align, vtable->tlen);
+		char   *table;
+		int		offset;
 
+		assert(buf->vtable.tlen >= sizeof(int32));
+		table = (char *)&buf->vtable +
+			INTALIGN(offsetof(FBVtable, offset[buf->nattrs]));
+		offset = TYPEALIGN(align, vtable->tlen);
+		memcpy(table + offset, ptr, sz);
 		vtable->offset[index] = offset;
-		memcpy((char *)buf->table + offset, ptr, sz);
 		vtable->tlen = offset + sz;
 		vtable->vlen = Max(vtable->vlen,
 						   offsetof(FBVtable, offset[index+1]));
-		*buf->table = vtable->vlen;
 	}
 }
 
@@ -86,31 +90,36 @@ __addBufferBinary(FBTableBuf *buf, int index, void *ptr, int sz, int32 shift)
 static inline void
 addBufferBool(FBTableBuf *buf, int index, bool value)
 {
-	__addBufferScalar(buf, index, &value, sizeof(value), 1);
+	if (value != 0)
+		__addBufferScalar(buf, index, &value, sizeof(value), 1);
 }
 
 static inline void
 addBufferChar(FBTableBuf *buf, int index, int8 value)
 {
-	__addBufferScalar(buf, index, &value, sizeof(value), 1);
+	if (value != 0)
+		__addBufferScalar(buf, index, &value, sizeof(value), 1);
 }
 
 static inline void
 addBufferShort(FBTableBuf *buf, int index, int16 value)
 {
-	__addBufferScalar(buf, index, &value, sizeof(value), ALIGNOF_SHORT);
+	if (value != 0)
+		__addBufferScalar(buf, index, &value, sizeof(value), ALIGNOF_SHORT);
 }
 
 static inline void
 addBufferInt(FBTableBuf *buf, int index, int32 value)
 {
-	__addBufferScalar(buf, index, &value, sizeof(value), ALIGNOF_INT);
+	if (value != 0)
+		__addBufferScalar(buf, index, &value, sizeof(value), ALIGNOF_INT);
 }
 
 static inline void
 addBufferLong(FBTableBuf *buf, int index, int64 value)
 {
-	__addBufferScalar(buf, index, &value, sizeof(value), ALIGNOF_LONG);
+	if (value != 0)
+		__addBufferScalar(buf, index, &value, sizeof(value), ALIGNOF_LONG);
 }
 
 static inline void
@@ -183,25 +192,30 @@ addBufferVector(FBTableBuf *buf, int index, int nitems, FBTableBuf **elements)
 }
 
 static FBTableBuf *
-makeBufferFlatten(FBTableBuf *buf)
+__makeBufferFlatten(FBTableBuf *buf, const char *func_name)
 {
-	size_t		base_sz;
+	size_t		base_sz = buf->vtable.vlen + buf->vtable.tlen;
 	size_t		extra_sz = 0;
+	char	   *table;
+	char	   *table_old;
 	char	   *pos;
-	int			i;
+	int			i, diff;
 
-	/* close up the hole between vtable tail and table head if any */
 	assert(buf->vtable.vlen == SHORTALIGN(buf->vtable.vlen));
-	if ((char *)&buf->vtable + buf->vtable.vlen != (char *)buf->table)
+	assert(buf->vtable.tlen >= sizeof(int32));
+	/* close up the hole between vtable tail and table head if any */
+	table = ((char *)&buf->vtable + buf->vtable.vlen);
+	table_old = ((char *)&buf->vtable +
+				 INTALIGN(offsetof(FBVtable, offset[buf->nattrs])));
+	if (table != table_old)
 	{
-		char   *dst = (char *)&buf->vtable + buf->vtable.vlen;
-		char   *src = (char *)buf->table;
-
-		assert(dst < src);
-		memmove(dst, src, buf->vtable.tlen);
-		buf->table = (int32 *)dst;
+		assert(table < table_old);
+		memmove(table, table_old, buf->vtable.tlen);
 	}
-	base_sz = buf->vtable.vlen + INTALIGN(buf->vtable.tlen);
+	*((int32 *)table) = buf->vtable.vlen;
+	diff = INTALIGN(buf->vtable.tlen) - buf->vtable.tlen;
+	if (diff > 0)
+		memset(table + buf->vtable.tlen, 0, diff);
 
 	/* check extra buffer usage */
 	for (i=0; i < buf->nattrs; i++)
@@ -214,10 +228,15 @@ makeBufferFlatten(FBTableBuf *buf)
 		buf->length = base_sz;
 	else
 	{
-		buf = repalloc(buf, base_sz + extra_sz);
-		buf->table = (int32 *)((char *)&buf->vtable + buf->vtable.vlen);
-		/* note that we may inject gap space if vlen is not INT aligned */
-		pos = (char *)&buf->vtable + INTALIGN(base_sz);
+		buf = repalloc(buf, offsetof(FBTableBuf,
+									 vtable) + MAXALIGN(base_sz) + extra_sz);
+		table = (char *)&buf->vtable + buf->vtable.vlen;
+		/*
+		 * memo: we shall copy the flat image to the location where 'table'
+		 * is aligned to INT. So, extra buffer should begin from INT aligned
+		 * offset to the table.
+		 */
+		pos = table + INTALIGN(buf->vtable.tlen);
 		for (i=0; i < buf->nattrs; i++)
 		{
 			int32  *offset;
@@ -225,7 +244,7 @@ makeBufferFlatten(FBTableBuf *buf)
 			if (!buf->extra_buf[i])
 				continue;
 			assert(buf->vtable.offset[i] != 0);
-			offset = (int32 *)((char *)buf->table + buf->vtable.offset[i]);
+			offset = (int32 *)(table + buf->vtable.offset[i]);
 			assert(*offset >= 0 && *offset < buf->extra_sz[i]);
 			*offset = (pos - (char *)offset) + *offset;
 
@@ -237,11 +256,14 @@ makeBufferFlatten(FBTableBuf *buf)
 	return buf;
 }
 
+#define makeBufferFlatten(a)	__makeBufferFlatten((a),__FUNCTION__)
+
 static FBTableBuf *
 createArrowTypeInt(ArrowTypeInt *node)
 {
 	FBTableBuf *buf = allocFBTableBuf(2);
 
+	assert(node->tag == ArrowNodeTag__Int);
 	addBufferInt(buf, 0, node->bitWidth);
 	addBufferBool(buf, 1, node->is_signed);
 
@@ -253,6 +275,7 @@ createArrowTypeFloatingPoint(ArrowTypeFloatingPoint *node)
 {
 	FBTableBuf *buf = allocFBTableBuf(1);
 
+	assert(node->tag == ArrowNodeTag__FloatingPoint);
 	addBufferInt(buf, 0, node->precision);
 
 	return makeBufferFlatten(buf);
@@ -306,6 +329,7 @@ addBufferArrowBufferVector(FBTableBuf *buf, int index,
 	{
 		ArrowBuffer *b = &arrow_buffers[i];
 
+		assert(b->tag == ArrowNodeTag__Buffer);
 		vector->buffers[i].offset = b->offset;
 		vector->buffers[i].length = b->length;
 	}
@@ -336,6 +360,7 @@ addBufferArrowFieldNodeVector(FBTableBuf *buf, int index,
 	{
 		ArrowFieldNode *f = &elements[i];
 
+		assert(f->tag == ArrowNodeTag__FieldNode);
 		vector->nodes[i].length		= f->length;
 		vector->nodes[i].null_count	= f->null_count;
 	}
@@ -349,6 +374,7 @@ createArrowKeyValue(ArrowKeyValue *node)
 {
 	FBTableBuf *buf = allocFBTableBuf(2);
 
+	assert(node->tag == ArrowNodeTag__KeyValue);
 	addBufferString(buf, 0, node->key);
 	addBufferString(buf, 1, node->value);
 
@@ -362,6 +388,8 @@ createArrowDictionaryEncoding(ArrowDictionaryEncoding *node)
 	FBTableBuf *typeInt;
 
 	assert(node->tag == ArrowNodeTag__DictionaryEncoding);
+	if (node->id == 0)
+		return NULL;
 	addBufferLong(buf, 0, node->id);
 	typeInt = createArrowTypeInt(&node->indexType);
 	assert(typeInt != NULL);
@@ -380,6 +408,7 @@ createArrowField(ArrowField *node)
 	ArrowTypeTag	type_tag;
 	int				i;
 
+	assert(node->tag == ArrowNodeTag__Field);
 	addBufferString(buf, 0, node->name);
 	addBufferBool(buf, 1, node->nullable);
 	type = createArrowType(&node->type, &type_tag);
@@ -399,11 +428,11 @@ createArrowField(ArrowField *node)
 
 	if (node->_num_custom_metadata > 0)
 	{
-		FBTableBuf	  **custom_metadata
+		FBTableBuf	  **cmetadata
 			= alloca(sizeof(FBTableBuf *) * node->_num_custom_metadata);
 		for (i=0; i < node->_num_custom_metadata; i++)
-			custom_metadata[i]=createArrowKeyValue(&node->custom_metadata[i]);
-		addBufferVector(buf, 6, node->_num_custom_metadata, custom_metadata);
+			cmetadata[i] = createArrowKeyValue(&node->custom_metadata[i]);
+		addBufferVector(buf, 6, node->_num_custom_metadata, cmetadata);
 	}
 	return makeBufferFlatten(buf);
 }
@@ -417,6 +446,7 @@ createArrowSchema(ArrowSchema *node)
 	FBTableBuf	  **cmetadata;
 	int				i;
 
+	assert(node->tag == ArrowNodeTag__Schema);
 	addBufferBool(buf, 0, node->endianness);
 	if (node->_num_fields > 0)
 	{
@@ -441,6 +471,7 @@ createArrowRecordBatch(ArrowRecordBatch *node)
 {
 	FBTableBuf *buf = allocFBTableBuf(3);
 
+	assert(node->tag == ArrowNodeTag__RecordBatch);
 	addBufferLong(buf, 0, node->length);
 	addBufferArrowFieldNodeVector(buf, 1,
 								  node->_num_nodes,
@@ -457,6 +488,7 @@ createArrowDictionaryBatch(ArrowDictionaryBatch *node)
 	FBTableBuf *buf = allocFBTableBuf(3);
 	FBTableBuf *dataBuf;
 
+	assert(node->tag == ArrowNodeTag__DictionaryBatch);
 	addBufferLong(buf, 0, node->id);
 	dataBuf = createArrowRecordBatch(&node->data);
 	addBufferOffset(buf, 1, dataBuf);
@@ -472,6 +504,7 @@ createArrowMessage(ArrowMessage *node)
 	FBTableBuf *data;
 	ArrowMessageHeader tag;
 
+	assert(node->tag == ArrowNodeTag__Message);
 	addBufferShort(buf, 0, node->version);
 	switch (node->body.tag)
 	{
@@ -524,6 +557,7 @@ addBufferArrowBlockVector(FBTableBuf *buf, int index,
 	{
 		ArrowBlock *b = &arrow_blocks[i];
 
+		assert(b->tag == ArrowNodeTag__Block);
 		vector->blocks[i].offset = b->offset;
 		vector->blocks[i].metaDataLength = b->metaDataLength;
 		vector->blocks[i].bodyLength = b->bodyLength;
@@ -537,6 +571,7 @@ createArrowFooter(ArrowFooter *node)
 	FBTableBuf	   *buf = allocFBTableBuf(4);
 	FBTableBuf	   *schema;
 
+	assert(node->tag == ArrowNodeTag__Footer);
 	addBufferShort(buf, 0, node->version);
 	schema = createArrowSchema(&node->schema);
 	addBufferOffset(buf, 1, schema);
@@ -549,15 +584,99 @@ createArrowFooter(ArrowFooter *node)
 	return makeBufferFlatten(buf);
 }
 
+static ssize_t
+__writeFlatBufferMessage(int fdesc, FBTableBuf *payload)
+{
+	char	   *temp, *pos;
+	int			gap;
+	ssize_t		nbytes;
+
+	assert(payload->length > 0);
+	gap = INTALIGN(payload->vtable.vlen) - payload->vtable.vlen;
+	temp = alloca(sizeof(int32) +		/* message header size */
+				  sizeof(int32) +		/* offset to the root table */
+				  MAXALIGN(payload->length));
+	pos = temp;
+	*((int32 *)pos) = sizeof(int32) + MAXALIGN(payload->length);
+	pos += sizeof(int32);
+	*((int32 *)pos) = sizeof(int32) + gap + payload->vtable.vlen;
+	pos += sizeof(int32);
+	if (gap > 0)
+	{
+		memset(pos, 0, gap);
+		pos += gap;
+	}
+	memcpy(pos, &payload->vtable, payload->length);
+	pos += payload->length;
+	gap = MAXALIGN(pos - temp) - (pos - temp);
+	if (gap > 0)
+	{
+		memset(pos, 0, gap);
+		pos += gap;
+	}
+	nbytes = write(fdesc, temp, pos - temp);
+	if (nbytes != (pos - temp))
+		Elog("failed on write: %m");
+	return nbytes;
+}
+
 void
 writeArrowRecordBatch(SQLtable *table)
 {}
 
-void
+static void
+__setupArrowDictionaryEncoding(ArrowDictionaryEncoding *dict,
+							   SQLattribute *attr)
+{
+	dict->tag = ArrowNodeTag__DictionaryEncoding;
+}
+
+static void
+__setupArrowField(ArrowField *field, SQLattribute *attr)
+{
+	memset(field, 0, sizeof(ArrowField));
+	field->tag = ArrowNodeTag__Field;
+	field->name = attr->attname;
+	field->_name_len = strlen(attr->attname);
+	field->nullable = true;
+	field->type = attr->arrow_type;
+	__setupArrowDictionaryEncoding(&field->dictionary, attr);
+	if (attr->subtypes)
+	{
+		SQLtable   *sub = attr->subtypes;
+		int			i;
+
+		field->children = alloca(sizeof(ArrowField) * sub->nfields);
+		field->_num_children = sub->nfields;
+		for (i=0; i < sub->nfields; i++)
+			__setupArrowField(&field->children[i], &sub->attrs[i]);
+	}
+	//custom_metadata?
+}
+
+ssize_t
 writeArrowSchema(SQLtable *table)
 {
-	//make a schema structure
+	ArrowMessage	message;
+	ArrowSchema	   *schema;
+	FBTableBuf	   *buf;
+	int32			i;
 
+	/* setup Message of Schema */
+	memset(&message, 0, sizeof(ArrowMessage));
+	message.tag = ArrowNodeTag__Message;
+	message.version = ArrowMetadataVersion__V4;
+	schema = &message.body.schema;
+	schema->tag = ArrowNodeTag__Schema;
+	schema->endianness = ArrowEndianness__Little;
+	schema->fields = alloca(sizeof(ArrowField) * table->nfields);
+	schema->_num_fields = table->nfields;
+	for (i=0; i < table->nfields; i++)
+		__setupArrowField(&schema->fields[i], &table->attrs[i]);
+
+	/* serialization */
+	buf = createArrowMessage(&message);
+	return __writeFlatBufferMessage(table->fdesc, buf);
 }
 
 void
