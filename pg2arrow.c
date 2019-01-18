@@ -369,7 +369,7 @@ int main(int argc, char * const argv[])
 	/* open the output file */
 	if (output_filename)
 	{
-		table->fdesc = open(output_filename, O_RDWR | O_CREAT);
+		table->fdesc = open(output_filename, O_RDWR | O_CREAT | O_TRUNC);
 		if (table->fdesc < 0)
 			Elog("failed to open '%s'", output_filename);
 		table->filename = output_filename;
@@ -379,7 +379,7 @@ int main(int argc, char * const argv[])
 		char	temp_filename[128];
 
 		strcpy(temp_filename, "/tmp/XXXXXX.arrow");
-		table->fdesc = mkostemps(temp_filename, 6, O_RDWR | O_CREAT);
+		table->fdesc = mkostemps(temp_filename, 6, O_RDWR | O_CREAT | O_TRUNC);
 		if (table->fdesc < 0)
 			Elog("failed to open '%s' : %m", temp_filename);
 		table->filename = pstrdup(temp_filename);
@@ -394,7 +394,6 @@ int main(int argc, char * const argv[])
 		Elog("failed on write(2): %m");
 	nbytes = writeArrowSchema(table);
 
-
 	do {
 		pgsql_append_results(table, res);
 		PQclear(res);
@@ -404,8 +403,8 @@ int main(int argc, char * const argv[])
 	if (table->nitems > 0)
 		pgsql_writeout_buffer(table);
 
-	//pgsql_writeout_footer(...);
-	//pgsql_dump_buffer(table);
+	nbytes = writeArrowFooter(table);
+
 	return 0;
 }
 

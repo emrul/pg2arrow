@@ -504,14 +504,14 @@ attribute_assign_arrow_type(SQLattribute *attr,
 		else if (strcmp(typname, "float4") == 0)
 		{
 			attr->arrow_type.tag = ArrowNodeTag__FloatingPoint;
-			attr->arrow_type.FloatingPoint.precision = 32;
+			attr->arrow_type.FloatingPoint.precision = ArrowPrecision__Single;
 			attr->put_value = put_inline_32b_value;
 			attr->stat_update = stat_update_float4_value;
 		}
 		else if (strcmp(typname, "float8") == 0)
 		{
 			attr->arrow_type.tag = ArrowNodeTag__FloatingPoint;
-			attr->arrow_type.FloatingPoint.precision = 64;
+			attr->arrow_type.FloatingPoint.precision = ArrowPrecision__Double;
 			attr->put_value = put_inline_64b_value;
 			attr->stat_update = stat_update_float8_value;
 		}
@@ -899,9 +899,29 @@ pgsql_clear_attribute(SQLattribute *attr)
 void
 pgsql_writeout_buffer(SQLtable *table)
 {
-	int		j;
+	off_t		currPos;
+	size_t		metaSize;
+	size_t		bodySize;
+	int			j, index;
+	ArrowBlock *b;
 
-	printf("writeout nitems=%zu\n", table->nitems);
+	/* write a new record batch */
+	currPos = lseek(table->fdesc, 0, SEEK_CUR);
+	if (currPos < 0)
+		Elog("unable to get current position of the file");
+	writeArrowRecordBatch(table, &metaSize, &bodySize);
+
+	index = table->numRecordBatches++;
+	if (index == 0)
+		table->recordBatches = palloc(sizeof(ArrowBlock));
+	else
+		table->recordBatches = repalloc(table->recordBatches,
+										sizeof(ArrowBlock) * (index+1));
+	b = &table->recordBatches[index];
+	b->tag = ArrowNodeTag__Block;
+	b->offset = currPos;
+	b->metaDataLength = metaSize;
+	b->bodyLength = bodySize;
 
 	/* makes table/attributes empty */
 	table->nitems = 0;

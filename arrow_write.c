@@ -332,6 +332,7 @@ addBufferArrowBufferVector(FBTableBuf *buf, int index,
 		assert(b->tag == ArrowNodeTag__Buffer);
 		vector->buffers[i].offset = b->offset;
 		vector->buffers[i].length = b->length;
+		printf("Buffer offset=%lu length=%lu\n", b->offset, b->length);
 	}
 	__addBufferBinary(buf, index, vector, length, 0);
 }
@@ -363,6 +364,7 @@ addBufferArrowFieldNodeVector(FBTableBuf *buf, int index,
 		assert(f->tag == ArrowNodeTag__FieldNode);
 		vector->nodes[i].length		= f->length;
 		vector->nodes[i].null_count	= f->null_count;
+		printf("FieldNode length=%lu null_count=%lu\n", f->length, f->null_count);
 	}
 	__addBufferBinary(buf, index, vector, length, 0);
 }
@@ -476,7 +478,7 @@ createArrowRecordBatch(ArrowRecordBatch *node)
 	addBufferArrowFieldNodeVector(buf, 1,
 								  node->_num_nodes,
 								  node->nodes);
-	addBufferArrowBufferVector(buf, 1,
+	addBufferArrowBufferVector(buf, 2,
 							   node->_num_buffers,
                                node->buffers);
 	return makeBufferFlatten(buf);
@@ -584,45 +586,281 @@ createArrowFooter(ArrowFooter *node)
 	return makeBufferFlatten(buf);
 }
 
-static ssize_t
-__writeFlatBufferMessage(int fdesc, FBTableBuf *payload)
+/* ----------------------------------------------------------------
+ * Routines for File I/O
+ * ---------------------------------------------------------------- */
+typedef struct
 {
-	char	   *temp, *pos;
-	int			gap;
+	int32		metaLength;
+	int32		rootOffset;
+	char		data[FLEXIBLE_ARRAY_MEMBER];
+} FBMessageFileImage;
+
+static ssize_t
+writeFlatBufferMessage(int fdesc, ArrowMessage *message)
+{
+	FBTableBuf *payload = createArrowMessage(message);
+	FBMessageFileImage *image;
 	ssize_t		nbytes;
+	ssize_t		offset;
+	ssize_t		length;
 
 	assert(payload->length > 0);
-	gap = INTALIGN(payload->vtable.vlen) - payload->vtable.vlen;
-	temp = alloca(sizeof(int32) +		/* message header size */
-				  sizeof(int32) +		/* offset to the root table */
-				  MAXALIGN(payload->length));
-	pos = temp;
-	*((int32 *)pos) = sizeof(int32) + MAXALIGN(payload->length);
-	pos += sizeof(int32);
-	*((int32 *)pos) = sizeof(int32) + gap + payload->vtable.vlen;
-	pos += sizeof(int32);
-	if (gap > 0)
-	{
-		memset(pos, 0, gap);
-		pos += gap;
-	}
-	memcpy(pos, &payload->vtable, payload->length);
-	pos += payload->length;
-	gap = MAXALIGN(pos - temp) - (pos - temp);
-	if (gap > 0)
-	{
-		memset(pos, 0, gap);
-		pos += gap;
-	}
-	nbytes = write(fdesc, temp, pos - temp);
-	if (nbytes != (pos - temp))
+	offset = INTALIGN(payload->vtable.vlen) - payload->vtable.vlen;
+    nbytes = INTALIGN(offset + payload->length);
+	length = offsetof(FBMessageFileImage, data[nbytes]);
+	image = alloca(length);
+	image->metaLength = sizeof(int32) + nbytes;
+	image->rootOffset = sizeof(int32) + INTALIGN(payload->vtable.vlen);
+	if (offset > 0)
+		memset(image->data, 0, offset);
+	memcpy(image->data + offset, &payload->vtable, payload->length);
+	offset += payload->length;
+	if (offset < nbytes)
+		memset(image->data + offset, 0, nbytes - offset);
+	if (write(fdesc, image, length) != length)
 		Elog("failed on write: %m");
-	return nbytes;
+	return length;
+}
+
+typedef struct
+{
+	int32		rootOffset;
+	char		data[FLEXIBLE_ARRAY_MEMBER];
+} FBFooterFileImage;
+
+typedef struct
+{
+	int32		metaOffset;
+	char		signature[6];
+} FBFooterTailImage;
+
+static ssize_t
+writeFlatBufferFooter(int fdesc, ArrowFooter *footer)
+{
+	FBTableBuf *payload = createArrowFooter(footer);
+	FBFooterFileImage *image;
+	FBFooterTailImage *tail;
+	ssize_t		nbytes;
+	ssize_t		offset;
+	ssize_t		length;
+
+	assert(payload->length > 0);
+    offset = INTALIGN(payload->vtable.vlen) - payload->vtable.vlen;
+	nbytes = INTALIGN(offset + payload->length);
+	length = (offsetof(FBFooterFileImage, data[nbytes]) +
+			  offsetof(FBFooterTailImage, signature[6]));
+	image = alloca(length + 1);
+	image->rootOffset = sizeof(int32) + INTALIGN(payload->vtable.vlen);
+	if (offset > 0)
+		memset(image->data, 0, offset);
+    memcpy(image->data + offset, &payload->vtable, payload->length);
+    offset += payload->length;
+	if (offset < nbytes)
+		memset(image->data + offset, 0, nbytes - offset);
+	tail = (FBFooterTailImage *)(image->data + nbytes);
+	tail->metaOffset = nbytes + sizeof(int32);
+	strcpy(tail->signature, "ARROW1");
+	if (write(fdesc, image, length) != length)
+		Elog("failed on write: %m");
+	return length;
+}
+
+static void
+__setupArrowFieldNode(ArrowFieldNode *node, size_t nitems, SQLattribute *attr)
+{
+	memset(node, 0, sizeof(ArrowFieldNode));
+	node->tag = ArrowNodeTag__FieldNode;
+	node->length = nitems;
+	node->null_count = attr->nullcount;
+}
+
+static int
+__setupArrowBuffer(ArrowBuffer *node, size_t *p_offset, SQLattribute *attr)
+{
+	ArrowBuffer *base = node;
+	size_t	offset = *p_offset;
+
+	switch (attr->arrow_type.tag)
+	{
+		case ArrowNodeTag__Int:
+		case ArrowNodeTag__FloatingPoint:
+		case ArrowNodeTag__Bool:
+		case ArrowNodeTag__Date:
+		case ArrowNodeTag__Time:
+		case ArrowNodeTag__Timestamp:
+		case ArrowNodeTag__Interval:
+			/* nullmap */
+			node->tag = ArrowNodeTag__Buffer;
+			node->offset = offset;
+			if (attr->nullcount == 0)
+				node->length = 0;
+			else
+			{
+				node->length = MAXALIGN(attr->nullmap.usage);
+				offset += node->length;
+			}
+			node++;
+			/* fixed length values */
+			node->tag = ArrowNodeTag__Buffer;
+			node->offset = offset;
+			node->length = MAXALIGN(attr->values.usage);
+			offset += node->length;
+			node++;
+			break;
+
+		case ArrowNodeTag__Null:
+		case ArrowNodeTag__Struct:
+		case ArrowNodeTag__Union:
+			/* only nullmap? */
+			Elog("unexpected node type %d", attr->arrow_type.tag);
+			break;
+		case ArrowNodeTag__Binary:
+		case ArrowNodeTag__Utf8:
+			/* nullmap */
+			node->tag = ArrowNodeTag__Buffer;
+			node->offset = offset;
+			if (attr->nullcount == 0)
+				node->length = 0;
+			else
+			{
+				node->length = MAXALIGN(attr->nullmap.usage);
+				offset += node->length;
+			}
+			node++;
+
+			/* 32bit index */
+			node->tag = ArrowNodeTag__Buffer;
+			node->offset = offset;
+			node->length = MAXALIGN(attr->values.usage);
+            offset += node->length;
+			node++;
+
+			/* extra buffer */
+			node->tag = ArrowNodeTag__Buffer;
+			node->offset = offset;
+			node->length = MAXALIGN(attr->extra.usage);
+			offset += node->length;
+			node++;
+			break;
+		default:
+			Elog("unknown Arrow data type");
+			break;
+	}
+	*p_offset = offset;
+	return (node - base);
+}
+
+static void
+writeArrowBodyOfAttribute(int fdesc, SQLattribute *attr)
+{
+	ssize_t		nbytes;
+
+	switch (attr->arrow_type.tag)
+	{
+		case ArrowNodeTag__Int:
+		case ArrowNodeTag__FloatingPoint:
+		case ArrowNodeTag__Bool:
+		case ArrowNodeTag__Date:
+		case ArrowNodeTag__Time:
+		case ArrowNodeTag__Timestamp:
+		case ArrowNodeTag__Interval:
+			/* nullmap */
+			if (attr->nullcount > 0)
+			{
+				nbytes = write(fdesc,
+							   attr->nullmap.ptr,
+							   MAXALIGN(attr->nullmap.usage));
+				if (nbytes != MAXALIGN(attr->nullmap.usage))
+					Elog("failed on write: %m");
+			}
+			/* fixed length values */
+			nbytes = write(fdesc,
+						   attr->values.ptr,
+						   MAXALIGN(attr->values.usage));
+			if (nbytes != MAXALIGN(attr->values.usage))
+				Elog("failed on write: %m");
+			break;
+
+		case ArrowNodeTag__Null:
+		case ArrowNodeTag__Struct:
+		case ArrowNodeTag__Union:
+			/* only nullmap? */
+			Elog("unexpected node type");
+			break;
+		case ArrowNodeTag__Binary:
+		case ArrowNodeTag__Utf8:
+			/* nullmap */
+			if (attr->nullcount > 0)
+			{
+				nbytes = write(fdesc,
+							   attr->nullmap.ptr,
+							   MAXALIGN(attr->nullmap.usage));
+				if (nbytes != MAXALIGN(attr->nullmap.usage))
+					Elog("failed on write: %m");
+			}
+			/* 32bit index */
+			nbytes = write(fdesc,
+						   attr->values.ptr,
+						   MAXALIGN(attr->values.usage));
+			if (nbytes != MAXALIGN(attr->values.usage))
+				Elog("failed on write: %m");
+			/* extra buffer */
+			nbytes = write(fdesc,
+                           attr->extra.ptr,
+                           MAXALIGN(attr->extra.usage));
+			if (nbytes != MAXALIGN(attr->extra.usage))
+				Elog("failed on write: %m");
+			break;
+		default:
+			Elog("unknown Arrow data type");
+			break;
+	}
 }
 
 void
-writeArrowRecordBatch(SQLtable *table)
-{}
+writeArrowRecordBatch(SQLtable *table,
+					  size_t *p_metaLength,
+					  size_t *p_bodyLength)
+{
+	ArrowMessage	message;
+	ArrowRecordBatch *rbatch;
+	ArrowFieldNode *nodes;
+	ArrowBuffer	   *buffers;
+	int32			i, j;
+	size_t			metaLength;
+	size_t			bodyLength = 0;
+
+	/* fill up [nodes] vector */
+	nodes = alloca(sizeof(ArrowFieldNode) * table->nfields);
+	for (i=0; i < table->nfields; i++)
+		__setupArrowFieldNode(&nodes[i], table->nitems, &table->attrs[i]);
+	/* fill up [buffers] vector */
+	buffers = alloca(sizeof(ArrowBuffer) * 3 * table->nfields);
+	for (i=0, j=0; i < table->nfields; i++)
+		j += __setupArrowBuffer(&buffers[j], &bodyLength, &table->attrs[i]);
+
+	/* setup Message of Schema */
+	memset(&message, 0, sizeof(ArrowMessage));
+	message.tag = ArrowNodeTag__Message;
+	message.version = ArrowMetadataVersion__V4;
+	message.bodyLength = bodyLength;
+
+	rbatch = &message.body.recordBatch;
+	rbatch->tag = ArrowNodeTag__RecordBatch;
+	rbatch->length = table->nitems;
+	rbatch->nodes = nodes;
+	rbatch->_num_nodes = table->nfields;
+	rbatch->buffers = buffers;
+	rbatch->_num_buffers = j;
+	/* serialization */
+	metaLength = writeFlatBufferMessage(table->fdesc, &message);
+	for (i=0; i < table->nfields; i++)
+		writeArrowBodyOfAttribute(table->fdesc, &table->attrs[i]);
+
+	*p_metaLength = metaLength;
+	*p_bodyLength = bodyLength;
+}
 
 static void
 __setupArrowDictionaryEncoding(ArrowDictionaryEncoding *dict,
@@ -659,7 +897,6 @@ writeArrowSchema(SQLtable *table)
 {
 	ArrowMessage	message;
 	ArrowSchema	   *schema;
-	FBTableBuf	   *buf;
 	int32			i;
 
 	/* setup Message of Schema */
@@ -673,12 +910,37 @@ writeArrowSchema(SQLtable *table)
 	schema->_num_fields = table->nfields;
 	for (i=0; i < table->nfields; i++)
 		__setupArrowField(&schema->fields[i], &table->attrs[i]);
-
 	/* serialization */
-	buf = createArrowMessage(&message);
-	return __writeFlatBufferMessage(table->fdesc, buf);
+	return writeFlatBufferMessage(table->fdesc, &message);
 }
 
-void
+ssize_t
 writeArrowFooter(SQLtable *table)
-{}
+{
+	ArrowFooter		footer;
+	ArrowSchema	   *schema;
+	int				i;
+
+	/* setup Footer */
+	memset(&footer, 0, sizeof(ArrowFooter));
+	footer.tag = ArrowNodeTag__Footer;
+	footer.version = ArrowMetadataVersion__V4;
+	/* setup Schema of Footer */
+	schema = &footer.schema;
+	schema->tag = ArrowNodeTag__Schema;
+	schema->endianness = ArrowEndianness__Little;
+	schema->fields = alloca(sizeof(ArrowField) * table->nfields);
+	schema->_num_fields = table->nfields;
+	for (i=0; i < table->nfields; i++)
+		__setupArrowField(&schema->fields[i], &table->attrs[i]);
+	/* [dictionaries] */
+	footer.dictionaries = table->dictionaries;
+	footer._num_dictionaries = table->numDictionaries;
+
+	/* [recordBatches] */
+	footer.recordBatches = table->recordBatches;
+	footer._num_recordBatches = table->numRecordBatches;
+
+	/* serialization */
+	return writeFlatBufferFooter(table->fdesc, &footer);
+}

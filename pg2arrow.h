@@ -73,6 +73,10 @@ struct SQLtable
 {
 	const char *filename;		/* output filename */
 	int			fdesc;			/* output file descriptor */
+	ArrowBlock *recordBatches;	/* recordBatches written in the past */
+	int			numRecordBatches;
+	ArrowBlock *dictionaries;	/* dictionaryBatches written in the past */
+	int			numDictionaries;
 	size_t		segment_sz;		/* threshold of the memory usage */
 	size_t		nitems;			/* current number of rows */
 	int			nfields;		/* number of attributes */
@@ -87,9 +91,11 @@ extern void 		pgsql_writeout_buffer(SQLtable *table);
 extern void			pgsql_dump_buffer(SQLtable *table);
 
 /* arrow_write.c */
-extern void			writeArrowRecordBatch(SQLtable *table);
 extern ssize_t		writeArrowSchema(SQLtable *table);
-extern void			writeArrowFooter(SQLtable *table);
+extern void			writeArrowRecordBatch(SQLtable *table,
+										  size_t *p_metaLength,
+										  size_t *p_bodyLength);
+extern ssize_t		writeArrowFooter(SQLtable *table);
 
 /* arrow_read.c */
 extern void			readArrowFile(const char *pathname);
