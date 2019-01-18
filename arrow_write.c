@@ -159,8 +159,6 @@ addBufferVector(FBTableBuf *buf, int index, int nitems, FBTableBuf **elements)
 	int32	i, *vector;
 	char   *pos;
 
-	if (nitems == 0)
-		return;
 	/* calculation of flat buffer length */
 	for (i=0; i < nitems; i++)
 	{
@@ -332,7 +330,6 @@ addBufferArrowBufferVector(FBTableBuf *buf, int index,
 		assert(b->tag == ArrowNodeTag__Buffer);
 		vector->buffers[i].offset = b->offset;
 		vector->buffers[i].length = b->length;
-		printf("Buffer offset=%lu length=%lu\n", b->offset, b->length);
 	}
 	__addBufferBinary(buf, index, vector, length, 0);
 }
@@ -364,7 +361,6 @@ addBufferArrowFieldNodeVector(FBTableBuf *buf, int index,
 		assert(f->tag == ArrowNodeTag__FieldNode);
 		vector->nodes[i].length		= f->length;
 		vector->nodes[i].null_count	= f->null_count;
-		printf("FieldNode length=%lu null_count=%lu\n", f->length, f->null_count);
 	}
 	__addBufferBinary(buf, index, vector, length, 0);
 }
@@ -407,6 +403,7 @@ createArrowField(ArrowField *node)
 	FBTableBuf	   *buf = allocFBTableBuf(7);
 	FBTableBuf	   *dictionary = NULL;
 	FBTableBuf	   *type = NULL;
+	FBTableBuf	  **vector;
 	ArrowTypeTag	type_tag;
 	int				i;
 
@@ -419,22 +416,22 @@ createArrowField(ArrowField *node)
 		addBufferOffset(buf, 3, type);
 	dictionary = createArrowDictionaryEncoding(&node->dictionary);
 	addBufferOffset(buf, 4, dictionary);
-	if (node->_num_children > 0)
+	if (node->_num_children == 0)
+		vector = NULL;
+	else
 	{
-		FBTableBuf	  **children
-			= alloca(sizeof(FBTableBuf *) * node->_num_children);
+		vector = alloca(sizeof(FBTableBuf *) * node->_num_children);
 		for (i=0; i < node->_num_children; i++)
-			children[i] =  createArrowField(&node->children[i]);
-		addBufferVector(buf, 5, node->_num_children, children);
+			vector[i] =  createArrowField(&node->children[i]);
 	}
+	addBufferVector(buf, 5, node->_num_children, vector);
 
 	if (node->_num_custom_metadata > 0)
 	{
-		FBTableBuf	  **cmetadata
-			= alloca(sizeof(FBTableBuf *) * node->_num_custom_metadata);
+		vector = alloca(sizeof(FBTableBuf *) * node->_num_custom_metadata);
 		for (i=0; i < node->_num_custom_metadata; i++)
-			cmetadata[i] = createArrowKeyValue(&node->custom_metadata[i]);
-		addBufferVector(buf, 6, node->_num_custom_metadata, cmetadata);
+			vector[i] = createArrowKeyValue(&node->custom_metadata[i]);
+		addBufferVector(buf, 6, node->_num_custom_metadata, vector);
 	}
 	return makeBufferFlatten(buf);
 }
