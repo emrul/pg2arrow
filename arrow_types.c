@@ -126,13 +126,95 @@ put_inline_64b_value(SQLattribute *attr, int row_index,
 	return usage;
 }
 
+#ifdef PG_INT128_TYPE
+/* parameters of Numeric type */
+#define NUMERIC_SIGN_MASK	0xC000
+#define NUMERIC_POS         0x0000
+#define NUMERIC_NEG         0x4000
+#define NUMERIC_NAN         0xC000
+
+#define NBASE				10000
+#define HALF_NBASE			5000
+#define DEC_DIGITS			4	/* decimal digits per NBASE digit */
+#define MUL_GUARD_DIGITS    2	/* these are measured in NBASE digits */
+#define DIV_GUARD_DIGITS	4
+typedef int16				NumericDigit;
+
 static size_t
 put_decimal_value(SQLattribute *attr, int row_index,
 				  const char *addr, int sz)
 {
-	Elog("not supported now");
-	return 0;
+	size_t		usage = 0;
+
+	if (!addr)
+	{
+		attr->nullcount++;
+		sql_buffer_clrbit(&attr->nullmap, row_index);
+        sql_buffer_append_zero(&attr->values, sizeof(int128));
+	}
+	else
+	{
+		struct {
+			int16		ndigits;
+			int16		weight;		/* weight of first digit */
+			int16		sign;		/* NUMERIC_(POS|NEG|NAN) */
+			int16		dscale;		/* display scale */
+			NumericDigit digits[FLEXIBLE_ARRAY_MEMBER];
+		}	   *rawdata = (void *)addr;
+		int		ndigits	= ntohs(rawdata->ndigits);
+		int		weight	= ntohs(rawdata->weight);
+		int		sign	= ntohs(rawdata->sign);
+		//int	dscale	= ntohs(rawdata->dscale);
+		//int	precision = attr->arrow_type.Decimal.precision;
+		int		ascale	= attr->arrow_type.Decimal.scale;
+		int128	value = 0;
+		int		d, dig;
+
+		if ((sign & NUMERIC_SIGN_MASK) == NUMERIC_NAN)
+			Elog("Decimal128 cannot map NaN in PostgreSQL Numeric");
+
+		/* makes integer portion first */
+		for (d=0; d <= weight; d++)
+		{
+			dig = (d < ndigits) ? ntohs(rawdata->digits[d]) : 0;
+			if (dig < 0 || dig >= NBASE)
+				Elog("Numeric digit is out of range: %d", (int)dig);
+			value = NBASE * value + (int128)dig;
+		}
+
+		/* makes floating point portion if any */
+		while (ascale > 0)
+		{
+			dig = (d >= 0 && d < ndigits) ? ntohs(rawdata->digits[d]) : 0;
+			if (dig < 0 || dig >= NBASE)
+				Elog("Numeric digit is out of range: %d", (int)dig);
+
+			if (ascale >= DEC_DIGITS)
+				value = NBASE * value + dig;
+			else if (ascale == 3)
+				value = 1000L * value + dig / 10L;
+			else if (ascale == 2)
+				value =  100L * value + dig / 100L;
+			else if (ascale == 1)
+				value =   10L * value + dig / 1000L;
+			else
+				Elog("internal bug");
+			ascale -= DEC_DIGITS;
+			d++;
+		}
+		/* is it a negative value? */
+		if ((sign & NUMERIC_NEG) != 0)
+			value = -value;
+
+		sql_buffer_setbit(&attr->nullmap, row_index);
+		sql_buffer_append(&attr->values, &value, sizeof(value));
+	}
+	usage = ARROWALIGN(attr->values.usage);
+	if (attr->nullcount > 0)
+		usage += ARROWALIGN(attr->nullmap.usage);
+	return usage;
 }
+#endif
 
 static size_t
 put_date_value(SQLattribute *attr, int row_index,
@@ -641,19 +723,35 @@ assignArrowTypeBool(SQLattribute *attr, int *p_numBuffers)
 static void
 assignArrowTypeDecimal(SQLattribute *attr, int *p_numBuffers)
 {
-	int		typmod			= attr->atttypmod - VARHDRSZ;
-	int		precision		= (typmod >> 16) & 0xffff;
-	int		scale			= (typmod & 0xffff);
+#ifdef PG_INT128_TYPE
+	int		typmod			= attr->atttypmod;
+	int		precision		= 30;	/* default, if typmod == -1 */
+	int		scale			= 11;	/* default, if typmod == -1 */
+
+	if (typmod >= VARHDRSZ)
+	{
+		typmod -= VARHDRSZ;
+		precision = (typmod >> 16) & 0xffff;
+		scale = (typmod & 0xffff);
+	}
+	printf("precision=%d scale=%d\n", precision, scale);
 
 	memset(&attr->arrow_type, 0, sizeof(ArrowType));
 	attr->arrow_type.tag	= ArrowNodeTag__Decimal;
 	attr->arrow_type.Decimal.precision = precision;
 	attr->arrow_type.Decimal.scale = scale;
 	attr->put_value			= put_decimal_value;
-	attr->setup_buffer		= NULL; //???
-	attr->write_buffer		= NULL; //???
+	attr->setup_buffer		= setup_buffer_inline_type;
+	attr->write_buffer		= write_buffer_inline_type;
 
-	*p_numBuffers += 999;	//???
+	*p_numBuffers += 2;		/* nullmap + values */
+#else
+	/*
+	 * MEMO: Numeric of PostgreSQL is mapped to Decimal128 in Apache Arrow.
+	 * Due to implementation reason, we require int128 support by compiler.
+	 */
+	Elog("Numeric type of PostgreSQL is not supported in this build");
+#endif
 }
 
 static void
@@ -788,8 +886,7 @@ assignArrowType(SQLattribute *attr, int *p_numBuffers)
 			assignArrowTypeUtf8(attr, p_numBuffers);
 			return;
 		}
-		else if (strcmp(attr->typname, "numeric") == 0 &&
-				 attr->atttypmod >= VARHDRSZ)
+		else if (strcmp(attr->typname, "numeric") == 0)
 		{
 			assignArrowTypeDecimal(attr, p_numBuffers);
 			return;

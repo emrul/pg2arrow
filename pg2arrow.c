@@ -389,7 +389,6 @@ writeArrowRecordBatch(SQLtable *table,
 	for (i=0, j=0; i < table->nfields; i++)
 		j += setupArrowFieldNode(nodes + j, table->nitems, &table->attrs[i]);
 	assert(j == table->numFieldNodes);
-	printf("j=%d numFieldNodes=%d\n", j, table->numFieldNodes);
 
 	/* fill up [buffers] vector */
 	buffers = alloca(sizeof(ArrowBuffer) * table->numBuffers);
