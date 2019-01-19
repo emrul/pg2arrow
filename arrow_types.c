@@ -18,6 +18,31 @@
  * ----------------------------------------------------------------
  */
 static size_t
+put_inline_bool_value(SQLattribute *attr, int row_index,
+					  const char *addr, int sz)
+{
+	size_t		usage;
+
+	assert(attr->attlen == sizeof(bool));
+	if (!addr)
+	{
+		attr->nullcount++;
+		sql_buffer_clrbit(&attr->nullmap, row_index);
+		sql_buffer_clrbit(&attr->values,  row_index);
+	}
+	else
+	{
+		assert(sz == sizeof(bool));
+		sql_buffer_setbit(&attr->nullmap, row_index);
+		sql_buffer_setbit(&attr->values,  row_index);
+	}
+	usage = ARROWALIGN(attr->values.usage);
+	if (attr->nullcount > 0)
+		usage += ARROWALIGN(attr->nullmap.usage);
+	return usage;
+}
+
+static size_t
 put_inline_8b_value(SQLattribute *attr, int row_index,
 					const char *addr, int sz)
 {
@@ -712,8 +737,8 @@ static void
 assignArrowTypeBool(SQLattribute *attr, int *p_numBuffers)
 {
 	attr->arrow_type.tag	= ArrowNodeTag__Bool;
-	attr->put_value			= put_inline_8b_value;
-	attr->stat_update		= stat_update_int8_value;
+	attr->put_value			= put_inline_bool_value;
+	attr->stat_update		= stat_update_1b_value;
 	attr->setup_buffer		= setup_buffer_inline_type;
 	attr->write_buffer		= write_buffer_inline_type;
 
@@ -810,7 +835,7 @@ assignArrowTypeList(SQLattribute *attr, int *p_numBuffers)
 	attr->setup_buffer		= setup_buffer_array_type;
 	attr->write_buffer		= write_buffer_array_type;
 
-	*p_numBuffers += 999; //???
+	*p_numBuffers += 2;		/* nullmap + offset vector */
 }
 
 static void
