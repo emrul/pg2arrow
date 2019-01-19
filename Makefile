@@ -1,7 +1,7 @@
 PG_CONFIG := pg_config
 PROGRAM    = pg2arrow
 
-OBJS = pg2arrow.o query.o arrow_read.o arrow_write.o arrow_dump.o
+OBJS = pg2arrow.o query.o arrow_types.o arrow_read.o arrow_write.o arrow_dump.o
 PG_CPPFLAGS = -I$(shell $(PG_CONFIG) --includedir) -O0 -g
 PG_LIBS = -lpq
 

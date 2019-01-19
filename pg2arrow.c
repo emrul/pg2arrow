@@ -349,6 +349,189 @@ pgsql_end_query(PGconn *conn)
 }
 
 /*
+ * setupArrowFieldNode
+ */
+static int
+setupArrowFieldNode(ArrowFieldNode *node, size_t nitems, SQLattribute *attr)
+{
+	SQLtable   *subtypes = attr->subtypes;
+	int			i, count = 1;
+
+	memset(node, 0, sizeof(ArrowFieldNode));
+	node->tag = ArrowNodeTag__FieldNode;
+	node->length = nitems;
+	node->null_count = attr->nullcount;
+
+	if (subtypes)
+	{
+		for (i=0; i < subtypes->nfields; i++)
+			count += setupArrowFieldNode(node + count, nitems,
+										 &subtypes->attrs[i]);
+	}
+	return count;
+}
+
+void
+writeArrowRecordBatch(SQLtable *table,
+					  size_t *p_metaLength,
+					  size_t *p_bodyLength)
+{
+	ArrowMessage	message;
+	ArrowRecordBatch *rbatch;
+	ArrowFieldNode *nodes;
+	ArrowBuffer	   *buffers;
+	int32			i, j;
+	size_t			metaLength;
+	size_t			bodyLength = 0;
+
+	/* fill up [nodes] vector */
+	nodes = alloca(sizeof(ArrowFieldNode) * table->numFieldNodes);
+	for (i=0, j=0; i < table->nfields; i++)
+		j += setupArrowFieldNode(nodes + j, table->nitems, &table->attrs[i]);
+	assert(j == table->numFieldNodes);
+	printf("j=%d numFieldNodes=%d\n", j, table->numFieldNodes);
+
+	/* fill up [buffers] vector */
+	buffers = alloca(sizeof(ArrowBuffer) * table->numBuffers);
+	for (i=0, j=0; i < table->nfields; i++)
+	{
+		SQLattribute   *attr = &table->attrs[i];
+		j += attr->setup_buffer(attr, buffers+j, &bodyLength);
+	}
+	assert(j == table->numBuffers);
+
+	/* setup Message of Schema */
+	memset(&message, 0, sizeof(ArrowMessage));
+	message.tag = ArrowNodeTag__Message;
+	message.version = ArrowMetadataVersion__V4;
+	message.bodyLength = bodyLength;
+
+	rbatch = &message.body.recordBatch;
+	rbatch->tag = ArrowNodeTag__RecordBatch;
+	rbatch->length = table->nitems;
+	rbatch->nodes = nodes;
+	rbatch->_num_nodes = table->numFieldNodes;
+	rbatch->buffers = buffers;
+	rbatch->_num_buffers = table->numBuffers;
+	/* serialization */
+	metaLength = writeFlatBufferMessage(table->fdesc, &message);
+	for (i=0; i < table->nfields; i++)
+	{
+		SQLattribute   *attr = &table->attrs[i];
+		attr->write_buffer(attr, table->fdesc);
+	}
+	*p_metaLength = metaLength;
+	*p_bodyLength = bodyLength;
+}
+
+static void
+setupArrowDictionaryEncoding(ArrowDictionaryEncoding *dict,
+							 SQLattribute *attr)
+{
+	dict->tag = ArrowNodeTag__DictionaryEncoding;
+	//TODO: support of dictionary encoding (Enum type?)
+}
+
+static void
+setupArrowField(ArrowField *field, SQLattribute *attr)
+{
+	memset(field, 0, sizeof(ArrowField));
+	field->tag = ArrowNodeTag__Field;
+	field->name = attr->attname;
+	field->_name_len = strlen(attr->attname);
+	field->nullable = true;
+	field->type = attr->arrow_type;
+	setupArrowDictionaryEncoding(&field->dictionary, attr);
+	if (attr->subtypes)
+	{
+		SQLtable   *sub = attr->subtypes;
+		int			i;
+
+		field->children = palloc0(sizeof(ArrowField) * sub->nfields);
+		field->_num_children = sub->nfields;
+		for (i=0; i < sub->nfields; i++)
+			setupArrowField(&field->children[i], &sub->attrs[i]);
+	}
+	//custom_metadata?
+	//min_values,max_values
+}
+
+static ssize_t
+writeArrowSchema(SQLtable *table)
+{
+	ArrowMessage	message;
+	ArrowSchema	   *schema;
+	int32			i;
+
+	/* setup Message of Schema */
+	memset(&message, 0, sizeof(ArrowMessage));
+	message.tag = ArrowNodeTag__Message;
+	message.version = ArrowMetadataVersion__V4;
+	schema = &message.body.schema;
+	schema->tag = ArrowNodeTag__Schema;
+	schema->endianness = ArrowEndianness__Little;
+	schema->fields = alloca(sizeof(ArrowField) * table->nfields);
+	schema->_num_fields = table->nfields;
+	for (i=0; i < table->nfields; i++)
+		setupArrowField(&schema->fields[i], &table->attrs[i]);
+	/* serialization */
+	return writeFlatBufferMessage(table->fdesc, &message);
+}
+
+static ssize_t
+writeArrowFooter(SQLtable *table)
+{
+	ArrowFooter		footer;
+	ArrowSchema	   *schema;
+	int				i;
+
+	/* setup Footer */
+	memset(&footer, 0, sizeof(ArrowFooter));
+	footer.tag = ArrowNodeTag__Footer;
+	footer.version = ArrowMetadataVersion__V4;
+	/* setup Schema of Footer */
+	schema = &footer.schema;
+	schema->tag = ArrowNodeTag__Schema;
+	schema->endianness = ArrowEndianness__Little;
+	schema->fields = alloca(sizeof(ArrowField) * table->nfields);
+	schema->_num_fields = table->nfields;
+	for (i=0; i < table->nfields; i++)
+		setupArrowField(&schema->fields[i], &table->attrs[i]);
+	/* [dictionaries] */
+	footer.dictionaries = table->dictionaries;
+	footer._num_dictionaries = table->numDictionaries;
+
+	/* [recordBatches] */
+	footer.recordBatches = table->recordBatches;
+	footer._num_recordBatches = table->numRecordBatches;
+
+	/* serialization */
+	return writeFlatBufferFooter(table->fdesc, &footer);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*
  * Entrypoint of pg2arrow
  */
 int main(int argc, char * const argv[])
@@ -393,7 +576,6 @@ int main(int argc, char * const argv[])
 	if (nbytes != 8)
 		Elog("failed on write(2): %m");
 	nbytes = writeArrowSchema(table);
-
 	do {
 		pgsql_append_results(table, res);
 		PQclear(res);
@@ -402,7 +584,6 @@ int main(int argc, char * const argv[])
 	pgsql_end_query(conn);
 	if (table->nitems > 0)
 		pgsql_writeout_buffer(table);
-
 	nbytes = writeArrowFooter(table);
 
 	return 0;
