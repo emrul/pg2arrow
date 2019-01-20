@@ -1003,7 +1003,8 @@ assignArrowType(SQLattribute *attr, int *p_numBuffers)
 			assignArrowTypeInt(attr, p_numBuffers, true);
 			return;
 		}
-		else if (strcmp(attr->typname, "float4") == 0 ||
+		else if (strcmp(attr->typname, "float2") == 0 ||	/* by PG-Strom */
+				 strcmp(attr->typname, "float4") == 0 ||
 				 strcmp(attr->typname, "float8") == 0)
 		{
 			assignArrowTypeFloatingPoint(attr, p_numBuffers);
