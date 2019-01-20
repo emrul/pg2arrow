@@ -376,7 +376,14 @@ pgsql_writeout_buffer(SQLtable *table)
 	b->metaDataLength = metaSize;
 	b->bodyLength = bodySize;
 
-	/* makes table/attributes empty */
+	/* shows progress (optional) */
+	if (shows_progress)
+	{
+		printf("RecordBatch %d: offset=%lu length=%lu (meta=%zu, body=%zu)\n",
+			   index, currPos, metaSize + bodySize, metaSize, bodySize);
+	}
+
+	/* makes table/attributes empty again */
 	table->nitems = 0;
 	for (j=0; j < table->nfields; j++)
 		pgsql_clear_attribute(&table->attrs[j]);

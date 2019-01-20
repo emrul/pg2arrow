@@ -94,6 +94,7 @@ struct SQLtable
 };
 
 /* pg2arrow.c */
+extern int			shows_progress;
 extern void			writeArrowRecordBatch(SQLtable *table,
 										  size_t *p_metaLength,
 										  size_t *p_bodyLength);

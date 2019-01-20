@@ -25,6 +25,7 @@ static char	   *pgsql_username = NULL;
 static int		pgsql_password_prompt = 0;
 static char	   *pgsql_database = NULL;
 static char	   *dump_arrow_filename = NULL;
+int				shows_progress = 0;
 
 static void
 usage(void)
@@ -55,6 +56,7 @@ usage(void)
 		  "\n"
 		  "Debug options:\n"
 		  "      --dump=FILENAME     dump information of arrow file\n"
+		  "      --progress          shows progress of the job.\n"
 		  "\n"
 		  "Report bugs to <pgstrom@heterodb.com>.\n",
 		  stderr);
@@ -77,6 +79,8 @@ parse_options(int argc, char * const argv[])
 		{"no-password",  no_argument,        NULL,  'w' },
 		{"password",     no_argument,        NULL,  'W' },
 		{"dump",         required_argument,  NULL, 1000 },
+		{"progress",     no_argument,        NULL, 1001 },
+		{"help",         no_argument,        NULL, 9999 },
 		{NULL, 0, NULL, 0},
 	};
 	int			c;
@@ -160,11 +164,15 @@ parse_options(int argc, char * const argv[])
 					Elog("-w and -W options are exclusive");
 				pgsql_password_prompt = 1;
 				break;
-			case 1000:
+			case 1000:		/* --dump */
 				if (dump_arrow_filename)
 					Elog("--dump option specified twice");
 				dump_arrow_filename = optarg;
 				break;
+			case 1001:		/* --progress */
+				shows_progress = 1;
+				break;
+			case 9999:		/* --help */
 			default:
 				usage();
 				break;
