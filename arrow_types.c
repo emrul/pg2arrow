@@ -278,7 +278,34 @@ put_variable_value(SQLattribute *attr,
 	}
 	else
 	{
-		assert(attr->attlen == -1 || attr->attlen == sz);
+		sql_buffer_setbit(&attr->nullmap, row_index);
+		sql_buffer_append(&attr->extra, addr, sz);
+		sql_buffer_append(&attr->values, &attr->extra.usage, sizeof(uint32));
+	}
+}
+
+static void
+put_bpchar_value(SQLattribute *attr,
+				 const char *addr, int sz)
+{
+	size_t		row_index = attr->nitems++;
+
+	if (row_index == 0)
+		sql_buffer_append_zero(&attr->values, sizeof(uint32));
+	if (!addr)
+	{
+		attr->nullcount++;
+		sql_buffer_clrbit(&attr->nullmap, row_index);
+		sql_buffer_append(&attr->values, &attr->extra.usage, sizeof(uint32));
+	}
+	else
+	{
+		char   *temp = alloca(sz+1);
+
+		/* trim spaces in the tail */
+		memcpy(temp, addr, sz);
+		while (sz > 0 && temp[sz-1]==' ')
+			sz--;
 		sql_buffer_setbit(&attr->nullmap, row_index);
 		sql_buffer_append(&attr->extra, addr, sz);
 		sql_buffer_append(&attr->values, &attr->extra.usage, sizeof(uint32));
@@ -840,6 +867,19 @@ assignArrowTypeUtf8(SQLattribute *attr, int *p_numBuffers)
 }
 
 static void
+assignArrowTypeBpchar(SQLattribute *attr, int *p_numBuffers)
+{
+	attr->arrow_type.tag	= ArrowNodeTag__Utf8;
+	attr->arrow_typename	= "Utf8";
+	attr->put_value			= put_bpchar_value;
+	attr->buffer_usage		= buffer_usage_varlena_type;
+	attr->setup_buffer		= setup_buffer_varlena_type;
+	attr->write_buffer		= write_buffer_varlena_type;
+
+	*p_numBuffers += 3;		/* nullmap + index + extra */
+}
+
+static void
 assignArrowTypeBool(SQLattribute *attr, int *p_numBuffers)
 {
 	attr->arrow_type.tag	= ArrowNodeTag__Bool;
@@ -1027,10 +1067,14 @@ assignArrowType(SQLattribute *attr, int *p_numBuffers)
 			return;
 		}
 		else if (strcmp(attr->typname, "text") == 0 ||
-				 strcmp(attr->typname, "varchar") == 0 ||
-				 strcmp(attr->typname, "bpchar") == 0)
+				 strcmp(attr->typname, "varchar") == 0)
 		{
 			assignArrowTypeUtf8(attr, p_numBuffers);
+			return;
+		}
+		else if (strcmp(attr->typname, "bpchar") == 0)
+		{
+			assignArrowTypeBpchar(attr, p_numBuffers);
 			return;
 		}
 		else if (strcmp(attr->typname, "numeric") == 0)
