@@ -48,21 +48,24 @@ struct SQLattribute
 	bool		attbyval;
 	uint8		attalign;		/* 1, 2, 4 or 8 */
 	SQLtable   *subtypes;		/* valid, if composite type */
-	SQLattribute *elemtype;		/* valid, if array type */
+	SQLattribute *element;		/* valid, if array type */
 	const char *typnamespace;	/* name of pg_type.typnamespace */
 	const char *typname;		/* pg_type.typname */
 	char		typtype;		/* pg_type.typtype */
 	ArrowType	arrow_type;		/* type in apache arrow */
+	const char *arrow_typename;	/* typename in apache arrow */
 	/* data buffer and handler */
-	size_t (*put_value)(SQLattribute *attr, int row_index,
+	void   (*put_value)(SQLattribute *attr,
 						const char *addr, int sz);
 	void   (*stat_update)(SQLattribute *attr,
 						  const char *addr, int sz);
+	size_t (*buffer_usage)(SQLattribute *attr);
 	int	   (*setup_buffer)(SQLattribute *attr,
 						   ArrowBuffer *node,
 						   size_t *p_offset);
 	void   (*write_buffer)(SQLattribute *attr, int fdesc);
 
+	long		nitems;			/* number of rows */
 	long		nullcount;		/* number of null values */
 	SQLbuffer	nullmap;		/* null bitmap */
 	SQLbuffer	values;			/* main storage of values */

@@ -44,6 +44,7 @@ usage(void)
 		  "  -s, --segment-size=SIZE size of record batch for each\n"
 		  "      (default is 512MB)\n"
 		  "  -D, --dictionary        enables dictionary compression\n"
+		  "      (not implemented yet)\n"
 		  "\n"
 		  "Connection options:\n"
 		  "  -h, --host=HOSTNAME     database server host\n"
@@ -352,21 +353,24 @@ pgsql_end_query(PGconn *conn)
  * setupArrowFieldNode
  */
 static int
-setupArrowFieldNode(ArrowFieldNode *node, size_t nitems, SQLattribute *attr)
+setupArrowFieldNode(ArrowFieldNode *node, SQLattribute *attr)
 {
 	SQLtable   *subtypes = attr->subtypes;
+	SQLattribute *element = attr->element;
 	int			i, count = 1;
 
 	memset(node, 0, sizeof(ArrowFieldNode));
 	node->tag = ArrowNodeTag__FieldNode;
-	node->length = nitems;
+	node->length = attr->nitems;
 	node->null_count = attr->nullcount;
-
+	/* array types */
+	if (element)
+		count += setupArrowFieldNode(node + count, element);
+	/* composite types */
 	if (subtypes)
 	{
 		for (i=0; i < subtypes->nfields; i++)
-			count += setupArrowFieldNode(node + count, nitems,
-										 &subtypes->attrs[i]);
+			count += setupArrowFieldNode(node + count, &subtypes->attrs[i]);
 	}
 	return count;
 }
@@ -387,7 +391,11 @@ writeArrowRecordBatch(SQLtable *table,
 	/* fill up [nodes] vector */
 	nodes = alloca(sizeof(ArrowFieldNode) * table->numFieldNodes);
 	for (i=0, j=0; i < table->nfields; i++)
-		j += setupArrowFieldNode(nodes + j, table->nitems, &table->attrs[i]);
+	{
+		SQLattribute   *attr = &table->attrs[i];
+		assert(table->nitems == attr->nitems);
+		j += setupArrowFieldNode(nodes + j, attr);
+	}
 	assert(j == table->numFieldNodes);
 
 	/* fill up [buffers] vector */
@@ -441,6 +449,14 @@ setupArrowField(ArrowField *field, SQLattribute *attr)
 	field->nullable = true;
 	field->type = attr->arrow_type;
 	setupArrowDictionaryEncoding(&field->dictionary, attr);
+	/* array type */
+	if (attr->element)
+	{
+		field->children = palloc0(sizeof(ArrowField));
+		field->_num_children = 1;
+		setupArrowField(field->children, attr->element);
+	}
+	/* composite type */
 	if (attr->subtypes)
 	{
 		SQLtable   *sub = attr->subtypes;
@@ -451,7 +467,7 @@ setupArrowField(ArrowField *field, SQLattribute *attr)
 		for (i=0; i < sub->nfields; i++)
 			setupArrowField(&field->children[i], &sub->attrs[i]);
 	}
-	//custom_metadata?
+	//custom_metadata here?
 	//min_values,max_values
 }
 
@@ -507,28 +523,6 @@ writeArrowFooter(SQLtable *table)
 	/* serialization */
 	return writeFlatBufferFooter(table->fdesc, &footer);
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 /*
  * Entrypoint of pg2arrow

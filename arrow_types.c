@@ -17,13 +17,12 @@
  *
  * ----------------------------------------------------------------
  */
-static size_t
-put_inline_bool_value(SQLattribute *attr, int row_index,
+static void
+put_inline_bool_value(SQLattribute *attr,
 					  const char *addr, int sz)
 {
-	size_t		usage;
+	size_t		row_index = attr->nitems++;
 
-	assert(attr->attlen == sizeof(bool));
 	if (!addr)
 	{
 		attr->nullcount++;
@@ -32,23 +31,17 @@ put_inline_bool_value(SQLattribute *attr, int row_index,
 	}
 	else
 	{
-		assert(sz == sizeof(bool));
 		sql_buffer_setbit(&attr->nullmap, row_index);
 		sql_buffer_setbit(&attr->values,  row_index);
 	}
-	usage = ARROWALIGN(attr->values.usage);
-	if (attr->nullcount > 0)
-		usage += ARROWALIGN(attr->nullmap.usage);
-	return usage;
 }
 
-static size_t
-put_inline_8b_value(SQLattribute *attr, int row_index,
+static void
+put_inline_8b_value(SQLattribute *attr,
 					const char *addr, int sz)
 {
-	size_t		usage;
+	size_t		row_index = attr->nitems++;
 
-	assert(attr->attlen == sizeof(uint8));
 	if (!addr)
 	{
 		attr->nullcount++;
@@ -57,24 +50,18 @@ put_inline_8b_value(SQLattribute *attr, int row_index,
 	}
 	else
 	{
-		assert(sz == sizeof(uint8));
 		sql_buffer_setbit(&attr->nullmap, row_index);
 		sql_buffer_append(&attr->values, addr, sz);
 	}
-	usage = ARROWALIGN(attr->values.usage);
-	if (attr->nullcount > 0)
-		usage += ARROWALIGN(attr->nullmap.usage);
-	return usage;
 }
 
-static size_t
-put_inline_16b_value(SQLattribute *attr, int row_index,
+static void
+put_inline_16b_value(SQLattribute *attr,
 					 const char *addr, int sz)
 {
-	size_t		usage;
+	size_t		row_index = attr->nitems++;
 	uint16		value;
 
-	assert(attr->attlen == sizeof(uint16));
 	if (!addr)
 	{
 		attr->nullcount++;
@@ -83,22 +70,17 @@ put_inline_16b_value(SQLattribute *attr, int row_index,
 	}
 	else
 	{
-		assert(sz == sizeof(uint16));
 		value = ntohs(*((const uint16 *)addr));
 		sql_buffer_setbit(&attr->nullmap, row_index);
 		sql_buffer_append(&attr->values, &value, sz);
 	}
-	usage = ARROWALIGN(attr->values.usage);
-	if (attr->nullcount > 0)
-		usage += ARROWALIGN(attr->nullmap.usage);
-	return usage;
 }
 
-static size_t
-put_inline_32b_value(SQLattribute *attr, int row_index,
+static void
+put_inline_32b_value(SQLattribute *attr,
 					 const char *addr, int sz)
 {
-	size_t		usage;
+	size_t		row_index = attr->nitems++;
 	uint32		value;
 
 	assert(attr->attlen == sizeof(uint32));
@@ -115,21 +97,16 @@ put_inline_32b_value(SQLattribute *attr, int row_index,
 		sql_buffer_setbit(&attr->nullmap, row_index);
 		sql_buffer_append(&attr->values, &value, sz);
 	}
-	usage = ARROWALIGN(attr->values.usage);
-	if (attr->nullcount > 0)
-		usage += ARROWALIGN(attr->nullmap.usage);
-	return usage;
 }
 
-static size_t
-put_inline_64b_value(SQLattribute *attr, int row_index,
+static void
+put_inline_64b_value(SQLattribute *attr,
 					 const char *addr, int sz)
 {
-	size_t		usage;
+	size_t		row_index = attr->nitems++;
 	uint64		value;
 	uint32		h, l;
 
-	assert(attr->attlen == sizeof(uint64));
 	if (!addr)
 	{
 		attr->nullcount++;
@@ -138,17 +115,12 @@ put_inline_64b_value(SQLattribute *attr, int row_index,
 	}
 	else
 	{
-		assert(sz == sizeof(uint64));
 		h = ntohl(*((const uint32 *)(addr)));
 		l = ntohl(*((const uint32 *)(addr + sizeof(uint32))));
 		value = (uint64)h << 32 | (uint64)l;
 		sql_buffer_setbit(&attr->nullmap, row_index);
 		sql_buffer_append(&attr->values, &value, sz);
 	}
-	usage = ARROWALIGN(attr->values.usage);
-	if (attr->nullcount > 0)
-		usage += ARROWALIGN(attr->nullmap.usage);
-	return usage;
 }
 
 #ifdef PG_INT128_TYPE
@@ -165,11 +137,11 @@ put_inline_64b_value(SQLattribute *attr, int row_index,
 #define DIV_GUARD_DIGITS	4
 typedef int16				NumericDigit;
 
-static size_t
-put_decimal_value(SQLattribute *attr, int row_index,
+static void
+put_decimal_value(SQLattribute *attr,
 				  const char *addr, int sz)
 {
-	size_t		usage = 0;
+	size_t		row_index = attr->nitems++;
 
 	if (!addr)
 	{
@@ -234,18 +206,14 @@ put_decimal_value(SQLattribute *attr, int row_index,
 		sql_buffer_setbit(&attr->nullmap, row_index);
 		sql_buffer_append(&attr->values, &value, sizeof(value));
 	}
-	usage = ARROWALIGN(attr->values.usage);
-	if (attr->nullcount > 0)
-		usage += ARROWALIGN(attr->nullmap.usage);
-	return usage;
 }
 #endif
 
-static size_t
-put_date_value(SQLattribute *attr, int row_index,
+static void
+put_date_value(SQLattribute *attr,
 			   const char *addr, int sz)
 {
-	size_t		usage;
+	size_t		row_index = attr->nitems++;
 
 	if (!addr)
 	{
@@ -263,17 +231,13 @@ put_date_value(SQLattribute *attr, int row_index,
 		value -= UNIX_EPOCH_JDATE;
 		sql_buffer_append(&attr->values, &value, sz);
 	}
-	usage = ARROWALIGN(attr->values.usage);
-	if (attr->nullcount > 0)
-		usage += ARROWALIGN(attr->nullmap.usage);
-	return usage;
 }
 
-static size_t
-put_timestamp_value(SQLattribute *attr, int row_index,
+static void
+put_timestamp_value(SQLattribute *attr,
 					const char *addr, int sz)
 {
-	size_t		usage;
+	size_t		row_index = attr->nitems++;
 
 	if (!addr)
 	{
@@ -296,17 +260,13 @@ put_timestamp_value(SQLattribute *attr, int row_index,
 				  UNIX_EPOCH_JDATE) * USECS_PER_DAY;
 		sql_buffer_append(&attr->values, &value, sizeof(Timestamp));
 	}
-	usage = ARROWALIGN(attr->values.usage);
-	if (attr->nullcount > 0)
-		usage += ARROWALIGN(attr->nullmap.usage);
-	return 0;
 }
 
-static size_t
-put_variable_value(SQLattribute *attr, int row_index,
+static void
+put_variable_value(SQLattribute *attr,
 				   const char *addr, int sz)
 {
-	size_t		usage;
+	size_t		row_index = attr->nitems++;
 
 	if (row_index == 0)
 		sql_buffer_append_zero(&attr->values, sizeof(uint32));
@@ -323,27 +283,81 @@ put_variable_value(SQLattribute *attr, int row_index,
 		sql_buffer_append(&attr->extra, addr, sz);
 		sql_buffer_append(&attr->values, &attr->extra.usage, sizeof(uint32));
 	}
-	usage = (ARROWALIGN(attr->values.usage) +
-			 ARROWALIGN(attr->extra.usage));
-	if (attr->nullcount > 0)
-		usage += ARROWALIGN(attr->nullmap.usage);
-	return usage;
 }
 
-static size_t
-put_array_value(SQLattribute *attr, int row_index,
+static void
+put_array_value(SQLattribute *attr,
 				const char *addr, int sz)
 {
-	Elog("not supported yet");
-	return 0;
+	SQLattribute *element = attr->element;
+	size_t		row_index = attr->nitems++;
+
+	if (row_index == 0)
+		sql_buffer_append_zero(&attr->values, sizeof(uint32));
+	if (!addr)
+	{
+		attr->nullcount++;
+		sql_buffer_clrbit(&attr->nullmap, row_index);
+		sql_buffer_append(&attr->values, &element->nitems, sizeof(int32));
+	}
+	else
+	{
+		static bool		notification_has_printed = false;
+		struct {
+			int32		ndim;
+			int32		hasnull;
+			int32		element_type;
+			struct {
+				int32	sz;
+				int32	lb;
+			} dim[FLEXIBLE_ARRAY_MEMBER];
+		}  *rawdata = (void *) addr;
+		int32		ndim = ntohl(rawdata->ndim);
+		//int32		hasnull = ntohl(rawdata->hasnull);
+		Oid			element_type = ntohl(rawdata->element_type);
+		size_t		i, nitems = 1;
+		int			item_sz;
+		char	   *pos;
+
+		if (element_type != element->atttypid)
+			Elog("PostgreSQL array type mismatch");
+		if (ndim < 1)
+			Elog("Invalid dimension size of PostgreSQL Array (ndim=%d)", ndim);
+		if (ndim > 1 && !notification_has_printed)
+		{
+			fprintf(stderr, "Notice: multi-dimensional PostgreSQL Array is extracted to List<%s> type in Apache Arrow, due to data type restrictions", attr->arrow_typename);
+			notification_has_printed = true;
+		}
+		for (i=0; i < ndim; i++)
+			nitems *= ntohl(rawdata->dim[i].sz);
+
+		pos = (char *)&rawdata->dim[ndim];
+		for (i=0; i < nitems; i++)
+		{
+			if (pos + sizeof(int32) > addr + sz)
+				Elog("out of range - binary array has corruption");
+			item_sz = ntohl(*((int32 *)pos));
+			pos += sizeof(int32);
+			if (item_sz < 0)
+				element->put_value(element, NULL, 0);
+			else
+			{
+				element->put_value(element, pos, item_sz);
+				pos += item_sz;
+			}
+		}
+		sql_buffer_setbit(&attr->nullmap, row_index);
+		sql_buffer_append(&attr->values, &element->nitems, sizeof(int32));
+	}
 }
 
-static size_t
-put_composite_value(SQLattribute *attr, int row_index,
+static void
+put_composite_value(SQLattribute *attr,
 					const char *addr, int sz)
 {
 	/* see record_send() */
 	SQLtable   *subtypes = attr->subtypes;
+	size_t		row_index = attr->nitems++;
 	size_t		usage = 0;
 	int			j, nvalids;
 
@@ -352,11 +366,11 @@ put_composite_value(SQLattribute *attr, int row_index,
 		attr->nullcount++;
 		sql_buffer_clrbit(&attr->nullmap, row_index);
 		usage += ARROWALIGN(attr->nullmap.usage);
-		/* null for all the subtypes */
+		/* NULL for all the subtypes */
 		for (j=0; j < subtypes->nfields; j++)
 		{
 			SQLattribute *subattr = &subtypes->attrs[j];
-			usage += subattr->put_value(subattr, row_index, NULL, 0);
+			subattr->put_value(subattr, NULL, 0);
 		}
 	}
 	else
@@ -376,9 +390,10 @@ put_composite_value(SQLattribute *attr, int row_index,
 			Oid		atttypid;
 			int		attlen;
 
+			assert(subattr->nitems == row_index);
 			if (j >= nvalids)
 			{
-				usage += subattr->put_value(subattr, row_index, NULL, 0);
+				subattr->put_value(subattr, NULL, 0);
 				continue;
 			}
 			if ((pos - addr) + sizeof(Oid) + sizeof(int) > sz)
@@ -391,16 +406,74 @@ put_composite_value(SQLattribute *attr, int row_index,
 			pos += sizeof(int);
 			if (attlen == -1)
 			{
-				usage += subattr->put_value(subattr, row_index, NULL, 0);
+				subattr->put_value(subattr, NULL, 0);
 			}
 			else
 			{
 				if ((pos - addr) + attlen > sz)
 					Elog("binary composite record corruption");
-				usage += subattr->put_value(subattr, row_index, pos, attlen);
+				subattr->put_value(subattr, pos, attlen);
 				pos += attlen;
 			}
 		}
+	}
+}
+
+/* ----------------------------------------------------------------
+ *
+ * buffer_usage handler for each data types
+ *
+ * ---------------------------------------------------------------- */
+static size_t
+buffer_usage_inline_type(SQLattribute *attr)
+{
+	size_t		usage;
+
+	usage = ARROWALIGN(attr->values.usage);
+	if (attr->nullcount > 0)
+		usage += ARROWALIGN(attr->nullmap.usage);
+	return usage;
+}
+
+static size_t
+buffer_usage_varlena_type(SQLattribute *attr)
+{
+	size_t		usage;
+
+	usage = (ARROWALIGN(attr->values.usage) +
+			 ARROWALIGN(attr->extra.usage));
+	if (attr->nullcount > 0)
+		usage += ARROWALIGN(attr->nullmap.usage);
+	return usage;
+}
+
+static size_t
+buffer_usage_array_type(SQLattribute *attr)
+{
+	SQLattribute   *element = attr->element;
+	size_t			usage;
+
+	usage = ARROWALIGN(attr->values.usage);
+	if (attr->nullcount > 0)
+		usage += ARROWALIGN(attr->nullmap.usage);
+	usage += element->buffer_usage(element);
+
+	return usage;
+}
+
+static size_t
+buffer_usage_composite_type(SQLattribute *attr)
+{
+	SQLtable   *subtypes = attr->subtypes;
+	size_t		usage = 0;
+	int			j;
+
+	if (attr->nullcount > 0)
+		usage += ARROWALIGN(attr->nullmap.usage);
+	for (j=0; j < subtypes->nfields; j++)
+	{
+		SQLattribute *subattr = &subtypes->attrs[j];
+		usage += subattr->buffer_usage(subattr);
 	}
 	return usage;
 }
@@ -503,10 +576,23 @@ static int
 setup_buffer_array_type(SQLattribute *attr,
 						ArrowBuffer *node, size_t *p_offset)
 {
-	Elog("to be implemented");
-	return -1;
-}
+	SQLattribute *element = attr->element;
+	int			count = 2;
 
+	/* nullmap */
+	if (attr->nullcount == 0)
+		*p_offset += setup_arrow_buffer(node, *p_offset, 0);
+	else
+		*p_offset += setup_arrow_buffer(node, *p_offset,
+										attr->nullmap.usage);
+	/* index values */
+	*p_offset += setup_arrow_buffer(node+1, *p_offset,
+									attr->values.usage);
+	/* element values */
+	count += element->setup_buffer(element, node+2, p_offset);
+
+	return count;
+}
 
 static int
 setup_buffer_composite_type(SQLattribute *attr,
@@ -610,7 +696,19 @@ write_buffer_varlena_type(SQLattribute *attr, int fdesc)
 static void
 write_buffer_array_type(SQLattribute *attr, int fdesc)
 {
-	Elog("not implemented yet");
+	SQLattribute *element = attr->element;
+
+	/* nullmap */
+	if (attr->nullcount > 0)
+		write_buffer_common(fdesc,
+							attr->nullmap.ptr,
+							attr->nullmap.usage);
+	/* offset values */
+	write_buffer_common(fdesc,
+						attr->values.ptr,
+						attr->values.usage);
+	/* element values */
+	element->write_buffer(element, fdesc);
 }
 
 static void
@@ -640,28 +738,33 @@ write_buffer_composite_type(SQLattribute *attr, int fdesc)
  * ----------------------------------------------------------------
  */
 static void
-assignArrowTypeInt(SQLattribute *attr, int *p_numBuffers)
+assignArrowTypeInt(SQLattribute *attr, int *p_numBuffers, bool is_signed)
 {
 	attr->arrow_type.tag = ArrowNodeTag__Int;
+	attr->arrow_type.Int.is_signed = is_signed;
 	switch (attr->attlen)
 	{
 		case sizeof(char):
 			attr->arrow_type.Int.bitWidth = 8;
+			attr->arrow_typename = (is_signed ? "Int8" : "Uint8");
 			attr->put_value = put_inline_8b_value;
 			attr->stat_update = stat_update_int8_value;
 			break;
 		case sizeof(short):
 			attr->arrow_type.Int.bitWidth = 16;
+			attr->arrow_typename = (is_signed ? "Int16" : "Uint16");
 			attr->put_value = put_inline_16b_value;
 			attr->stat_update = stat_update_int16_value;
 			break;
 		case sizeof(int):
 			attr->arrow_type.Int.bitWidth = 32;
+			attr->arrow_typename = (is_signed ? "Int32" : "Uint32");
 			attr->put_value = put_inline_32b_value;
 			attr->stat_update = stat_update_int32_value;
 			break;
 		case sizeof(long):
 			attr->arrow_type.Int.bitWidth = 64;
+			attr->arrow_typename = (is_signed ? "Int64" : "Uint64");
 			attr->put_value = put_inline_64b_value;
 			attr->stat_update = stat_update_int64_value;
 			break;
@@ -669,12 +772,7 @@ assignArrowTypeInt(SQLattribute *attr, int *p_numBuffers)
 			Elog("unsupported Int width: %d", attr->attlen);
 			break;
 	}
-	if (strcmp(attr->typname, "int2") == 0 ||
-		strcmp(attr->typname, "int4") == 0 ||
-		strcmp(attr->typname, "int8") == 0)
-		attr->arrow_type.Int.is_signed = true;
-	else
-		attr->arrow_type.Int.is_signed = false;
+	attr->buffer_usage = buffer_usage_inline_type;
 	attr->setup_buffer = setup_buffer_inline_type;
 	attr->write_buffer = write_buffer_inline_type;
 
@@ -689,15 +787,18 @@ assignArrowTypeFloatingPoint(SQLattribute *attr, int *p_numBuffers)
 	{
 		case sizeof(short):		/* half */
 			attr->arrow_type.FloatingPoint.precision = ArrowPrecision__Half;
+			attr->arrow_typename = "Float16";
 			attr->put_value = put_inline_16b_value;
 			break;
 		case sizeof(float):
 			attr->arrow_type.FloatingPoint.precision = ArrowPrecision__Single;
+			attr->arrow_typename = "Float32";
 			attr->put_value = put_inline_32b_value;
 			attr->stat_update = stat_update_float4_value;
 			break;
 		case sizeof(double):
 			attr->arrow_type.FloatingPoint.precision = ArrowPrecision__Double;
+			attr->arrow_typename = "Float64";
 			attr->put_value = put_inline_64b_value;
 			attr->stat_update = stat_update_float8_value;
 			break;
@@ -705,6 +806,7 @@ assignArrowTypeFloatingPoint(SQLattribute *attr, int *p_numBuffers)
 			Elog("unsupported floating point width: %d", attr->attlen);
 			break;
 	}
+	attr->buffer_usage = buffer_usage_inline_type;
 	attr->setup_buffer = setup_buffer_inline_type;
 	attr->write_buffer = write_buffer_inline_type;
 
@@ -715,7 +817,9 @@ static void
 assignArrowTypeBinary(SQLattribute *attr, int *p_numBuffers)
 {
 	attr->arrow_type.tag	= ArrowNodeTag__Binary;
+	attr->arrow_typename	= "Binary";
 	attr->put_value			= put_variable_value;
+	attr->buffer_usage		= buffer_usage_varlena_type;
 	attr->setup_buffer		= setup_buffer_varlena_type;
 	attr->write_buffer		= write_buffer_varlena_type;
 
@@ -726,7 +830,9 @@ static void
 assignArrowTypeUtf8(SQLattribute *attr, int *p_numBuffers)
 {
 	attr->arrow_type.tag	= ArrowNodeTag__Utf8;
+	attr->arrow_typename	= "Utf8";
 	attr->put_value			= put_variable_value;
+	attr->buffer_usage		= buffer_usage_varlena_type;
 	attr->setup_buffer		= setup_buffer_varlena_type;
 	attr->write_buffer		= write_buffer_varlena_type;
 
@@ -737,8 +843,10 @@ static void
 assignArrowTypeBool(SQLattribute *attr, int *p_numBuffers)
 {
 	attr->arrow_type.tag	= ArrowNodeTag__Bool;
+	attr->arrow_typename	= "Bool";
 	attr->put_value			= put_inline_bool_value;
-	attr->stat_update		= stat_update_1b_value;
+	attr->stat_update		= stat_update_int8_value;
+	attr->buffer_usage		= buffer_usage_inline_type;
 	attr->setup_buffer		= setup_buffer_inline_type;
 	attr->write_buffer		= write_buffer_inline_type;
 
@@ -759,13 +867,13 @@ assignArrowTypeDecimal(SQLattribute *attr, int *p_numBuffers)
 		precision = (typmod >> 16) & 0xffff;
 		scale = (typmod & 0xffff);
 	}
-	printf("precision=%d scale=%d\n", precision, scale);
-
 	memset(&attr->arrow_type, 0, sizeof(ArrowType));
 	attr->arrow_type.tag	= ArrowNodeTag__Decimal;
 	attr->arrow_type.Decimal.precision = precision;
 	attr->arrow_type.Decimal.scale = scale;
+	attr->arrow_typename	= "Decimal";
 	attr->put_value			= put_decimal_value;
+	attr->buffer_usage		= buffer_usage_inline_type;
 	attr->setup_buffer		= setup_buffer_inline_type;
 	attr->write_buffer		= write_buffer_inline_type;
 
@@ -784,8 +892,10 @@ assignArrowTypeDate(SQLattribute *attr, int *p_numBuffers)
 {
 	attr->arrow_type.tag	= ArrowNodeTag__Date;
 	attr->arrow_type.Date.unit = ArrowDateUnit__Day;
+	attr->arrow_typename	= "Date";
 	attr->put_value			= put_date_value;
 	attr->stat_update		= stat_update_int32_value;
+	attr->buffer_usage		= buffer_usage_inline_type;
 	attr->setup_buffer		= setup_buffer_inline_type;
 	attr->write_buffer		= write_buffer_inline_type;
 
@@ -798,8 +908,10 @@ assignArrowTypeTime(SQLattribute *attr, int *p_numBuffers)
 	attr->arrow_type.tag	= ArrowNodeTag__Time;
 	attr->arrow_type.Time.unit = ArrowTimeUnit__MicroSecond;
 	attr->arrow_type.Time.bitWidth = 64;
+	attr->arrow_typename	= "Time";
 	attr->put_value			= put_inline_64b_value;
 	attr->stat_update		= stat_update_int64_value;
+	attr->buffer_usage		= buffer_usage_inline_type;
 	attr->setup_buffer		= setup_buffer_inline_type;
 	attr->write_buffer		= write_buffer_inline_type;
 
@@ -811,8 +923,10 @@ assignArrowTypeTimestamp(SQLattribute *attr, int *p_numBuffers)
 {
 	attr->arrow_type.tag	= ArrowNodeTag__Timestamp;
 	attr->arrow_type.Timestamp.unit = ArrowTimeUnit__MicroSecond;
+	attr->arrow_typename	= "Timestamp";
 	attr->put_value			= put_timestamp_value;
 	attr->stat_update		= stat_update_int64_value;
+	attr->buffer_usage		= buffer_usage_inline_type;
 	attr->setup_buffer		= setup_buffer_inline_type;
 	attr->write_buffer		= write_buffer_inline_type;
 
@@ -823,6 +937,7 @@ assignArrowTypeTimestamp(SQLattribute *attr, int *p_numBuffers)
 static void
 assignArrowTypeInterval(SQLattribute *attr, int *p_numBuffers)
 {
+	usec + day + mon;
 	Elog("Interval is not supported yet");
 }
 #endif
@@ -830,8 +945,12 @@ assignArrowTypeInterval(SQLattribute *attr, int *p_numBuffers)
 static void
 assignArrowTypeList(SQLattribute *attr, int *p_numBuffers)
 {
+	SQLattribute *element = attr->element;
+
 	attr->arrow_type.tag	= ArrowNodeTag__List;
 	attr->put_value			= put_array_value;
+	attr->arrow_typename	= psprintf("List<%s>", element->arrow_typename);
+	attr->buffer_usage		= buffer_usage_array_type;
 	attr->setup_buffer		= setup_buffer_array_type;
 	attr->write_buffer		= write_buffer_array_type;
 
@@ -843,7 +962,9 @@ assignArrowTypeStruct(SQLattribute *attr, int *p_numBuffers)
 {
 	assert(attr->subtypes != NULL);
 	attr->arrow_type.tag	= ArrowNodeTag__Struct;
+	attr->arrow_typename	= "Struct";
 	attr->put_value			= put_composite_value;
+	attr->buffer_usage		= buffer_usage_composite_type;
 	attr->setup_buffer		= setup_buffer_composite_type;
 	attr->write_buffer		= write_buffer_composite_type;
 
@@ -862,7 +983,7 @@ assignArrowType(SQLattribute *attr, int *p_numBuffers)
 		assignArrowTypeStruct(attr, p_numBuffers);
 		return;
 	}
-	else if (attr->elemtype)
+	else if (attr->element)
 	{
 		assignArrowTypeList(attr, p_numBuffers);
 		return;
@@ -879,7 +1000,7 @@ assignArrowType(SQLattribute *attr, int *p_numBuffers)
 				 strcmp(attr->typname, "int4") == 0 ||
 				 strcmp(attr->typname, "int8") == 0)
 		{
-			assignArrowTypeInt(attr, p_numBuffers);
+			assignArrowTypeInt(attr, p_numBuffers, true);
 			return;
 		}
 		else if (strcmp(attr->typname, "float4") == 0 ||
@@ -925,7 +1046,7 @@ assignArrowType(SQLattribute *attr, int *p_numBuffers)
 			attr->attlen == sizeof(int) ||
 			attr->attlen == sizeof(long))
 		{
-			assignArrowTypeInt(attr, p_numBuffers);
+			assignArrowTypeInt(attr, p_numBuffers, false);
 			return;
 		}
 		/*

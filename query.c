@@ -15,8 +15,9 @@
 static SQLtable *
 pgsql_create_composite_type(PGconn *conn, Oid comptype_relid);
 static SQLattribute *
-pgsql_create_array_element(PGconn *conn, Oid array_elemid);
-
+pgsql_create_array_element(PGconn *conn, Oid array_elemid,
+						   int *p_numFieldNode,
+						   int *p_numBuffers);
 static inline bool
 pg_strtobool(const char *v)
 {
@@ -84,7 +85,9 @@ pgsql_setup_attribute(PGconn *conn,
 	if (typtype == 'b')
 	{
 		if (array_elemid != InvalidOid)
-			attr->elemtype = pgsql_create_array_element(conn, array_elemid);
+			attr->element = pgsql_create_array_element(conn, array_elemid,
+													   p_numFieldNodes,
+													   p_numBuffers);
 	}
 	else if (typtype == 'c')
 	{
@@ -188,7 +191,9 @@ pgsql_create_composite_type(PGconn *conn, Oid comptype_relid)
 }
 
 static SQLattribute *
-pgsql_create_array_element(PGconn *conn, Oid array_elemid)
+pgsql_create_array_element(PGconn *conn, Oid array_elemid,
+						   int *p_numFieldNode,
+						   int *p_numBuffers)
 {
 	SQLattribute   *attr = palloc0(sizeof(SQLattribute));
 	PGresult	   *res;
@@ -201,12 +206,11 @@ pgsql_create_array_element(PGconn *conn, Oid array_elemid)
 	const char	   *typtype;
 	const char	   *typrelid;
 	const char	   *typelem;
-	int				__dummy__;
 
 	snprintf(query, sizeof(query),
 			 "SELECT nspname, typname,"
 			 "       typlen, typbyval, typalign, typtype,"
-			 "       typrelid, typelem,"
+			 "       typrelid, typelem"
 			 "  FROM pg_catalog.pg_type t,"
 			 "       pg_catalog.pg_namespace n"
 			 " WHERE t.typnamespace = n.oid"
@@ -239,8 +243,8 @@ pgsql_create_array_element(PGconn *conn, Oid array_elemid)
 						  atooid(typelem),
 						  nspname,
 						  typname,
-						  &__dummy__,
-						  &__dummy__);
+						  p_numFieldNode,
+						  p_numBuffers);
 	return attr;
 }
 
@@ -319,6 +323,7 @@ pgsql_create_buffer(PGconn *conn, PGresult *res, size_t segment_sz)
 static void
 pgsql_clear_attribute(SQLattribute *attr)
 {
+	attr->nitems = 0;
 	attr->nullcount = 0;
 	sql_buffer_clear(&attr->nullmap);
 	sql_buffer_clear(&attr->values);
@@ -332,8 +337,8 @@ pgsql_clear_attribute(SQLattribute *attr)
 		for (j=0; j < subtypes->nfields; j++)
 			pgsql_clear_attribute(&subtypes->attrs[j]);
 	}
-	if (attr->elemtype)
-		pgsql_clear_attribute(attr->elemtype);
+	if (attr->element)
+		pgsql_clear_attribute(attr->element);
 	/* clear statistics */
 	attr->min_isnull = true;
 	attr->max_isnull = true;
@@ -390,8 +395,8 @@ pgsql_append_results(SQLtable *table, PGresult *res)
 	assert(nfields == table->nfields);
 	for (i=0; i < ntuples; i++)
 	{
-	retry:
 		usage = 0;
+
 		for (j=0; j < nfields; j++)
 		{
 			SQLattribute   *attr = &table->attrs[j];
@@ -409,50 +414,20 @@ pgsql_append_results(SQLtable *table, PGresult *res)
 				addr = PQgetvalue(res, i, j);
 				sz = PQgetlength(res, i, j);
 			}
-			usage += attr->put_value(attr, table->nitems, addr, sz);
+			assert(attr->nitems == table->nitems);
+			attr->put_value(attr, addr, sz);
+			if (attr->stat_update)
+				attr->stat_update(attr, addr, sz);
+			usage += attr->buffer_usage(attr);
 		}
-		/* check threshold to write out */
+		table->nitems++;
+		/* exceeds the threshold to write? */
 		if (usage > table->segment_sz)
 		{
 			if (table->nitems == 0)
 				Elog("A result row is larger than size of record batch!!");
-			/* fixup NULL-count if last row updated it */
-			for (j=0; j < nfields; j++)
-			{
-				SQLattribute   *attr = &table->attrs[j];
-
-				if (PQgetisnull(res, i, j))
-				{
-					assert(attr->nullcount > 0);
-					attr->nullcount--;
-				}
-			}
-			/* write out the bunch of query results */
 			pgsql_writeout_buffer(table);
-			goto retry;
 		}
-		/* update statistics */
-		for (j=0; j < nfields; j++)
-		{
-			SQLattribute   *attr = &table->attrs[j];
-			const char	   *addr;
-			size_t			sz;
-
-			if (!attr->stat_update)
-				continue;
-			if (PQgetisnull(res, i, j))
-			{
-				addr = NULL;
-				sz = 0;
-			}
-			else
-			{
-				addr = PQgetvalue(res, i, j);
-				sz = PQgetlength(res, i, j);
-			}
-			attr->stat_update(attr, addr, sz);
-		}
-		table->nitems++;
 	}
 }
 
@@ -476,8 +451,8 @@ pgsql_dump_attribute(SQLattribute *attr, const char *label, int indent)
 
 	if (attr->typtype == 'b')
 	{
-		if (attr->elemtype)
-			pgsql_dump_attribute(attr->elemtype, "element", indent+2);
+		if (attr->element)
+			pgsql_dump_attribute(attr->element, "element", indent+2);
 	}
 	else if (attr->typtype == 'c')
 	{
