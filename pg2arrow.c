@@ -645,7 +645,8 @@ int main(int argc, char * const argv[])
 	/* open the output file */
 	if (output_filename)
 	{
-		table->fdesc = open(output_filename, O_RDWR | O_CREAT | O_TRUNC);
+		table->fdesc = open(output_filename,
+							O_RDWR | O_CREAT | O_TRUNC, 0644);
 		if (table->fdesc < 0)
 			Elog("failed to open '%s'", output_filename);
 		table->filename = output_filename;
@@ -655,7 +656,8 @@ int main(int argc, char * const argv[])
 		char	temp_filename[128];
 
 		strcpy(temp_filename, "/tmp/XXXXXX.arrow");
-		table->fdesc = mkostemps(temp_filename, 6, O_RDWR | O_CREAT | O_TRUNC);
+		table->fdesc = mkostemps(temp_filename, 6,
+								 O_RDWR | O_CREAT | O_TRUNC);
 		if (table->fdesc < 0)
 			Elog("failed to open '%s' : %m", temp_filename);
 		table->filename = pstrdup(temp_filename);
