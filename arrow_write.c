@@ -551,11 +551,10 @@ createArrowDictionaryEncoding(ArrowDictionaryEncoding *node)
 	FBTableBuf *typeInt;
 
 	assert(node->tag == ArrowNodeTag__DictionaryEncoding);
-	if (node->id == 0)
+	if (node->indexType.tag != ArrowNodeTag__Int)
 		return NULL;
 	addBufferLong(buf, 0, node->id);
 	typeInt = createArrowTypeInt(&node->indexType);
-	assert(typeInt != NULL);
 	addBufferOffset(buf, 1, typeInt);
 	addBufferBool(buf, 2, node->isOrdered);
 
@@ -642,7 +641,7 @@ createArrowRecordBatch(ArrowRecordBatch *node)
 								  node->nodes);
 	addBufferArrowBufferVector(buf, 2,
 							   node->_num_buffers,
-                               node->buffers);
+							   node->buffers);
 	return makeBufferFlatten(buf);
 }
 

@@ -11,6 +11,10 @@
 #define atooid(x)		((Oid) strtoul((x), NULL, 10))
 #define InvalidOid		((Oid) 0)
 
+/* Dictionary Batch */
+SQLdictionary  *pgsql_dictionary_list = NULL;
+static int		pgsql_dictionary_count = 0;
+
 /* forward declarations */
 static SQLtable *
 pgsql_create_composite_type(PGconn *conn, Oid comptype_relid);
@@ -40,6 +44,72 @@ pg_strtochar(const char *v)
 	if (strlen(v) > 1)
 		Elog("unexpected character string");
 	return *v;
+}
+
+static SQLdictionary *
+pgsql_create_dictionary(PGconn *conn, Oid enum_typeid)
+{
+	SQLdictionary *dict;
+	PGresult   *res;
+	char		query[4096];
+	int			i, j, nitems;
+	int			nslots;
+
+	for (dict = pgsql_dictionary_list; dict != NULL; dict = dict->next)
+	{
+		if (dict->enum_typeid == enum_typeid)
+			return dict;
+	}
+
+	snprintf(query, sizeof(query),
+			 "SELECT enumlabel"
+			 "  FROM pg_catalog.pg_enum"
+			 " WHERE enumtypid = %u", enum_typeid);
+	res = PQexec(conn, query);
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		Elog("failed on pg_enum system catalog query: %s",
+			 PQresultErrorMessage(res));
+
+	nitems = PQntuples(res);
+	nslots = Min(Max(nitems, 1<<10), 1<<18);
+	dict = palloc0(offsetof(SQLdictionary, hslots[nslots]));
+	dict->enum_typeid = enum_typeid;
+	dict->dict_id = pgsql_dictionary_count++;
+	sql_buffer_init(&dict->values);
+	sql_buffer_init(&dict->extra);
+	dict->nitems = nitems;
+	dict->nslots = nslots;
+	sql_buffer_append_zero(&dict->values, sizeof(int32));
+	for (i=0; i < nitems; i++)
+	{
+		const char *enumlabel = PQgetvalue(res, i, 0);
+		hashItem   *hitem;
+		uint32		hash;
+		size_t		len;
+
+		if (PQgetisnull(res, i, 0) != 0)
+			Elog("Unexpected result from pg_enum system catalog");
+
+		len = strlen(enumlabel);
+		hash = hash_any((const unsigned char *)enumlabel, len);
+		j = hash % nslots;
+		hitem = palloc0(offsetof(hashItem, label[len + 1]));
+		strcpy(hitem->label, enumlabel);
+		hitem->label_len = len;
+		hitem->index = i;
+		hitem->hash = hash;
+		hitem->next = dict->hslots[j];
+		dict->hslots[j] = hitem;
+
+		sql_buffer_append(&dict->extra, enumlabel, len);
+		sql_buffer_append(&dict->values, &dict->extra.usage, sizeof(int32));
+	}
+	dict->nitems = nitems;
+	dict->next = pgsql_dictionary_list;
+	pgsql_dictionary_list = dict;
+	PQclear(res);
+
+	return dict;
 }
 
 /*
@@ -101,17 +171,10 @@ pgsql_setup_attribute(PGconn *conn,
 
 		attr->subtypes = subtypes;
 	}
-#if 0
-	else if (typtype == 'd')
-	{
-		//Domain type has identical definition to the base type
-		//expect for its constraint.
-	}
 	else if (typtype == 'e')
 	{
-		//Enum type may be ideal for dictionary compression
+		attr->enumdict = pgsql_create_dictionary(conn, atttypid);
 	}
-#endif
 	else
 		Elog("unknown state pf typtype: %c", typtype);
 

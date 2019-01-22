@@ -18,7 +18,6 @@ static void      pgsql_end_query(PGconn *conn);
 static char	   *sql_command = NULL;
 static char	   *output_filename = NULL;
 static size_t	batch_segment_sz = 0;
-static int		dictionary_compression = 0;
 static char	   *pgsql_hostname = NULL;
 static char	   *pgsql_portno = NULL;
 static char	   *pgsql_username = NULL;
@@ -44,8 +43,6 @@ usage(void)
 		  "Arrow format options:\n"
 		  "  -s, --segment-size=SIZE size of record batch for each\n"
 		  "      (default is 512MB)\n"
-		  "  -D, --dictionary        enables dictionary compression\n"
-		  "      (not implemented yet)\n"
 		  "\n"
 		  "Connection options:\n"
 		  "  -h, --host=HOSTNAME     database server host\n"
@@ -72,7 +69,6 @@ parse_options(int argc, char * const argv[])
 		{"file",         required_argument,  NULL,  'f' },
 		{"output",       required_argument,  NULL,  'o' },
 		{"segment-size", required_argument,  NULL,  's' },
-		{"dictionary",   no_argument,        NULL,  'D' },
 		{"host",         required_argument,  NULL,  'h' },
 		{"port",         required_argument,  NULL,  'p' },
 		{"username",     required_argument,  NULL,  'U' },
@@ -135,9 +131,6 @@ parse_options(int argc, char * const argv[])
 					batch_segment_sz = atol(optarg) * (1UL << 30);
 				else
 					Elog("segment size is not valid: %s", optarg);
-				break;
-			case 'D':
-				dictionary_compression = 1;
 				break;
 			case 'h':
 				if (pgsql_hostname)
@@ -444,7 +437,14 @@ setupArrowDictionaryEncoding(ArrowDictionaryEncoding *dict,
 							 SQLattribute *attr)
 {
 	dict->tag = ArrowNodeTag__DictionaryEncoding;
-	//TODO: support of dictionary encoding (Enum type?)
+	if (attr->enumdict)
+	{
+		dict->id = attr->enumdict->dict_id;
+		dict->indexType.tag = ArrowNodeTag__Int;
+		dict->indexType.bitWidth = 32;	/* OID in PostgreSQL */
+		dict->indexType.is_signed = true;
+		dict->isOrdered = false;
+	}
 }
 
 static void
@@ -499,6 +499,98 @@ writeArrowSchema(SQLtable *table)
 		setupArrowField(&schema->fields[i], &table->attrs[i]);
 	/* serialization */
 	return writeFlatBufferMessage(table->fdesc, &message);
+}
+
+static void
+__writeArrowDictionaryBatch(int fdesc, ArrowBlock *block, SQLdictionary *dict)
+{
+	ArrowMessage	message;
+	ArrowDictionaryBatch *dbatch;
+	ArrowRecordBatch *rbatch;
+	ArrowBuffer	   *buffer;
+	loff_t			currPos;
+	size_t			metaLength = 0;
+	size_t			bodyLength = 0;
+
+	/* setup Message of DictionaryBatch */
+	memset(&message, 0, sizeof(ArrowMessage));
+    message.tag = ArrowNodeTag__Message;
+    message.version = ArrowMetadataVersion__V4;
+
+	/* DictionaryBatch portion */
+	dbatch = &message.body.dictionaryBatch;
+	dbatch->tag = ArrowNodeTag__DictionaryBatch;
+	dbatch->id = dict->dict_id;
+	dbatch->isDelta = false;
+
+	/* RecordBatch portion */
+	rbatch = &dbatch->data;
+	rbatch->tag = ArrowNodeTag__RecordBatch;
+	rbatch->length = dict->nitems;
+	rbatch->_num_nodes = 1;
+    rbatch->nodes = alloca(sizeof(ArrowFieldNode));
+	rbatch->nodes[0].tag = ArrowNodeTag__FieldNode;
+	rbatch->nodes[0].length = dict->nitems;
+	rbatch->nodes[0].null_count = 0;
+	rbatch->_num_buffers = 3;	/* empty nullmap + offset + extra buffer */
+	rbatch->buffers = alloca(sizeof(ArrowBuffer) * 3);
+	/* buffer:0 - nullmap */
+	buffer = &rbatch->buffers[0];
+	buffer->tag = ArrowNodeTag__Buffer;
+	buffer->offset = bodyLength;
+	buffer->length = 0;
+	/* buffer:1 - offset to extra buffer */
+	buffer = &rbatch->buffers[1];
+    buffer->tag = ArrowNodeTag__Buffer;
+    buffer->offset = bodyLength;
+    buffer->length = ARROWALIGN(dict->values.usage);
+	bodyLength += buffer->length;
+	/* buffer:2 - extra buffer */
+	buffer = &rbatch->buffers[2];
+	buffer->tag = ArrowNodeTag__Buffer;
+    buffer->offset = bodyLength;
+	buffer->length = ARROWALIGN(dict->extra.usage);
+	bodyLength += buffer->length;
+
+	/* serialization */
+	message.bodyLength = bodyLength;
+	currPos = lseek(fdesc, 0, SEEK_CUR);
+	if (currPos < 0)
+		Elog("unable to get current position of the file");
+	metaLength = writeFlatBufferMessage(fdesc, &message);
+	__write_buffer_common(fdesc, dict->values.ptr, dict->values.usage);
+	__write_buffer_common(fdesc, dict->extra.ptr,  dict->extra.usage);
+
+	/* setup Block of Footer */
+	block->tag = ArrowNodeTag__Block;
+	block->offset = currPos;
+	block->metaDataLength = metaLength;
+	block->bodyLength = bodyLength;
+}
+
+static void
+writeArrowDictionaryBatches(SQLtable *table)
+{
+	SQLdictionary  *dict;
+	int				index, count;
+
+	if (!pgsql_dictionary_list)
+		return;
+
+	for (dict = pgsql_dictionary_list, count=0;
+		 dict != NULL;
+		 dict = dict->next, count++);
+	table->numDictionaries = count;
+	table->dictionaries = palloc0(sizeof(ArrowBlock) * count);
+
+	for (dict = pgsql_dictionary_list, index=0;
+		 dict != NULL;
+		 dict = dict->next, index++)
+	{
+		__writeArrowDictionaryBatch(table->fdesc,
+									table->dictionaries + index,
+									dict);
+	}
 }
 
 static ssize_t
@@ -577,6 +669,7 @@ int main(int argc, char * const argv[])
 	if (nbytes != 8)
 		Elog("failed on write(2): %m");
 	nbytes = writeArrowSchema(table);
+	writeArrowDictionaryBatches(table);
 	do {
 		pgsql_append_results(table, res);
 		PQclear(res);

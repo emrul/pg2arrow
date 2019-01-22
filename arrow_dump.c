@@ -127,10 +127,9 @@ dumpArrowKeyValue(ArrowKeyValue *node, FILE *out)
 static void
 dumpArrowDictionaryEncoding(ArrowDictionaryEncoding *node, FILE *out)
 {
-
-
-
-
+	fprintf(out, "{DictionaryEncoding: id=%ld, indexType=", node->id);
+	dumpArrowNode((ArrowNode *)&node->indexType, out);
+	fprintf(out, ", isOrdered=%s}", node->isOrdered ? "true" : "false");
 }
 
 static void
@@ -142,6 +141,11 @@ dumpArrowField(ArrowField *node, FILE *out)
 			node->name ? node->name : "NULL",
 			node->nullable ? "true" : "false");
 	dumpArrowNode((ArrowNode *)&node->type, out);
+	if (node->dictionary.indexType.tag == ArrowNodeTag__Int)
+	{
+		fprintf(out, ", dictionary=");
+		dumpArrowDictionaryEncoding(&node->dictionary, out);
+	}
 	fprintf(out, ", children=[");
 	if (node->children)
 	{

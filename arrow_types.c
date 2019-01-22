@@ -446,6 +446,42 @@ put_composite_value(SQLattribute *attr,
 	}
 }
 
+static void
+put_dictionary_value(SQLattribute *attr,
+					 const char *addr, int sz)
+{
+	size_t		row_index = attr->nitems++;
+
+	if (!addr)
+	{
+		attr->nullcount++;
+		sql_buffer_clrbit(&attr->nullmap, row_index);
+		sql_buffer_append_zero(&attr->values, sizeof(uint32));
+	}
+	else
+	{
+		SQLdictionary *enumdict = attr->enumdict;
+		hashItem   *hitem;
+		uint32		hash;
+
+		hash = hash_any((const unsigned char *)addr, sz);
+		for (hitem = enumdict->hslots[hash % enumdict->nslots];
+			 hitem != NULL;
+			 hitem = hitem->next)
+		{
+			if (hitem->hash == hash &&
+				hitem->label_len == sz &&
+				memcmp(hitem->label, addr, sz) == 0)
+				break;
+		}
+		if (!hitem)
+			Elog("Enum label was not found in pg_enum result");
+
+		sql_buffer_setbit(&attr->nullmap, row_index);
+        sql_buffer_append(&attr->values,  &hitem->index, sizeof(int32));
+	}
+}
+
 /* ----------------------------------------------------------------
  *
  * buffer_usage handler for each data types
@@ -650,56 +686,18 @@ setup_buffer_composite_type(SQLattribute *attr,
  *
  * ----------------------------------------------------------------
  */
-static inline void
-write_buffer_common(int fdesc, const void *buffer, size_t length)
-{
-	ssize_t		nbytes;
-	ssize_t		offset = 0;
-
-	while (offset < length)
-	{
-		nbytes = write(fdesc, (const char *)buffer + offset, length - offset);
-		if (nbytes < 0)
-		{
-			if (errno == EINTR)
-				continue;
-			Elog("failed on write(2): %m");
-		}
-		offset += nbytes;
-	}
-
-	if (length != MAXALIGN(length))
-	{
-		ssize_t	gap = MAXALIGN(length) - length;
-		int64	zero = 0;
-
-		offset = 0;
-		while (offset < gap)
-		{
-			nbytes = write(fdesc, (const char *)&zero + offset, gap - offset);
-			if (nbytes < 0)
-			{
-				if (errno == EINTR)
-					continue;
-				Elog("failed on write(2): %m");
-			}
-			offset += nbytes;
-		}
-	}
-}
-
 static void
 write_buffer_inline_type(SQLattribute *attr, int fdesc)
 {
 	/* nullmap */
 	if (attr->nullcount > 0)
-		write_buffer_common(fdesc,
-							attr->nullmap.ptr,
-							attr->nullmap.usage);
+		__write_buffer_common(fdesc,
+							  attr->nullmap.ptr,
+							  attr->nullmap.usage);
 	/* fixed length values */
-	write_buffer_common(fdesc,
-						attr->values.ptr,
-						attr->values.usage);
+	__write_buffer_common(fdesc,
+						  attr->values.ptr,
+						  attr->values.usage);
 }
 
 static void
@@ -707,17 +705,17 @@ write_buffer_varlena_type(SQLattribute *attr, int fdesc)
 {
 	/* nullmap */
 	if (attr->nullcount > 0)
-		write_buffer_common(fdesc,
-							attr->nullmap.ptr,
-							attr->nullmap.usage);
+		__write_buffer_common(fdesc,
+							  attr->nullmap.ptr,
+							  attr->nullmap.usage);
 	/* index values */
-	write_buffer_common(fdesc,
-						attr->values.ptr,
-						attr->values.usage);
+	__write_buffer_common(fdesc,
+						  attr->values.ptr,
+						  attr->values.usage);
 	/* extra buffer */
-	write_buffer_common(fdesc,
-						attr->extra.ptr,
-						attr->extra.usage);
+	__write_buffer_common(fdesc,
+						  attr->extra.ptr,
+						  attr->extra.usage);
 }
 
 static void
@@ -727,13 +725,13 @@ write_buffer_array_type(SQLattribute *attr, int fdesc)
 
 	/* nullmap */
 	if (attr->nullcount > 0)
-		write_buffer_common(fdesc,
-							attr->nullmap.ptr,
-							attr->nullmap.usage);
+		__write_buffer_common(fdesc,
+							  attr->nullmap.ptr,
+							  attr->nullmap.usage);
 	/* offset values */
-	write_buffer_common(fdesc,
-						attr->values.ptr,
-						attr->values.usage);
+	__write_buffer_common(fdesc,
+						  attr->values.ptr,
+						  attr->values.usage);
 	/* element values */
 	element->write_buffer(element, fdesc);
 }
@@ -746,9 +744,9 @@ write_buffer_composite_type(SQLattribute *attr, int fdesc)
 
 	/* nullmap */
 	if (attr->nullcount > 0)
-		write_buffer_common(fdesc,
-							attr->nullmap.ptr,
-							attr->nullmap.usage);
+		__write_buffer_common(fdesc,
+							  attr->nullmap.ptr,
+							  attr->nullmap.usage);
 	/* sub-types */
 	for (i=0; i < subtypes->nfields; i++)
 	{
@@ -1011,6 +1009,19 @@ assignArrowTypeStruct(SQLattribute *attr, int *p_numBuffers)
 	*p_numBuffers += 1;		/* only nullmap */
 }
 
+static void
+assignArrowTypeDictionary(SQLattribute *attr, int *p_numBuffers)
+{
+	attr->arrow_type.tag	= ArrowNodeTag__Utf8;
+	attr->arrow_typename	= psprintf("Enum; dictionary=%u", attr->atttypid);
+	attr->put_value			= put_dictionary_value;
+	attr->buffer_usage		= buffer_usage_inline_type;
+	attr->setup_buffer		= setup_buffer_inline_type;
+	attr->write_buffer		= write_buffer_inline_type;
+
+	*p_numBuffers += 2;		/* nullmap + values */
+}
+
 /*
  * assignArrowType
  */
@@ -1020,12 +1031,20 @@ assignArrowType(SQLattribute *attr, int *p_numBuffers)
 	memset(&attr->arrow_type, 0, sizeof(ArrowType));
 	if (attr->subtypes)
 	{
+		/* composite type */
 		assignArrowTypeStruct(attr, p_numBuffers);
 		return;
 	}
 	else if (attr->element)
 	{
+		/* array type */
 		assignArrowTypeList(attr, p_numBuffers);
+		return;
+	}
+	else if (attr->typtype == 'e')
+	{
+		/* enum type */
+		assignArrowTypeDictionary(attr, p_numBuffers);
 		return;
 	}
 	else if (strcmp(attr->typnamespace, "pg_catalog") == 0)

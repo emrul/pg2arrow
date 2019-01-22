@@ -330,7 +330,18 @@ readArrowType(ArrowType *type, int type_tag, const char *type_pos)
 
 static void
 readArrowDictionaryEncoding(ArrowDictionaryEncoding *dict, const char *pos)
-{}
+{
+	FBTable		t = fetchFBTable((int32 *)pos);
+	const char *type_pos;
+
+	memset(dict, 0, sizeof(ArrowDictionaryEncoding));
+	dict->tag		= ArrowNodeTag__DictionaryEncoding;
+	dict->id		= fetchLong(&t, 0);
+	type_pos		= fetchOffset(&t, 1);
+	dict->indexType.tag = ArrowNodeTag__Int;
+	readArrowTypeInt(&dict->indexType, type_pos);
+	dict->isOrdered	= fetchBool(&t, 2);
+}
 
 static void
 readArrowField(ArrowField *field, const char *pos)
