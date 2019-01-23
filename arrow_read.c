@@ -170,8 +170,11 @@ static void
 readArrowTypeDate(ArrowTypeDate *node, const char *pos)
 {
 	FBTable		t = fetchFBTable((int32 *) pos);
+	int16	   *ptr;
 
-	node->unit = fetchShort(&t, 0);
+	/* Date->unit has non-zero default value */
+	ptr = __fetchPointer(&t, 0);
+	node->unit = (ptr != NULL ? *ptr : ArrowDateUnit__MilliSecond);
 }
 
 static void

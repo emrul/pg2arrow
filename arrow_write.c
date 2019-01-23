@@ -297,7 +297,8 @@ createArrowTypeDate(ArrowTypeDate *node)
 	FBTableBuf *buf = allocFBTableBuf(1);
 
 	assert(node->tag == ArrowNodeTag__Date);
-	addBufferShort(buf, 0, node->unit);
+	if (node->unit != ArrowDateUnit__MilliSecond)
+		__addBufferScalar(buf, 0, &node->unit, sizeof(int16), ALIGNOF_SHORT);
 
 	return makeBufferFlatten(buf);
 }

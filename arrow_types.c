@@ -228,7 +228,7 @@ put_date_value(SQLattribute *attr,
 		assert(sz == sizeof(DateADT));
 		sql_buffer_setbit(&attr->nullmap, row_index);
 		value = ntohl(*((const DateADT *)addr));
-		value -= UNIX_EPOCH_JDATE;
+		value += (POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE);
 		sql_buffer_append(&attr->values, &value, sz);
 	}
 }
@@ -592,7 +592,7 @@ setup_arrow_buffer(ArrowBuffer *node, size_t offset, size_t length)
 	memset(node, 0, sizeof(ArrowBuffer));
 	node->tag = ArrowNodeTag__Buffer;
 	node->offset = offset;
-	node->length = MAXALIGN(length);
+	node->length = ARROWALIGN(length);
 
 	return node->length;
 }
