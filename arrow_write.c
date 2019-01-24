@@ -88,39 +88,44 @@ __addBufferBinary(FBTableBuf *buf, int index, void *ptr, int sz, int32 shift)
 
 
 static inline void
-addBufferBool(FBTableBuf *buf, int index, bool value)
+__addBufferBool(FBTableBuf *buf, int index, bool value, bool __default)
 {
-	if (value != 0)
+	if (value != __default)
 		__addBufferScalar(buf, index, &value, sizeof(value), 1);
 }
+#define addBufferBool(a,b,c)		__addBufferBool((a),(b),(c),false)
 
 static inline void
-addBufferChar(FBTableBuf *buf, int index, int8 value)
+__addBufferChar(FBTableBuf *buf, int index, int8 value, int8 __default)
 {
-	if (value != 0)
+	if (value != __default)
 		__addBufferScalar(buf, index, &value, sizeof(value), 1);
 }
+#define addBufferChar(a,b,c)		__addBufferChar((a),(b),(c),0)
 
 static inline void
-addBufferShort(FBTableBuf *buf, int index, int16 value)
+__addBufferShort(FBTableBuf *buf, int index, int16 value, int16 __default)
 {
-	if (value != 0)
+	if (value != __default)
 		__addBufferScalar(buf, index, &value, sizeof(value), ALIGNOF_SHORT);
 }
+#define addBufferShort(a,b,c)		__addBufferShort((a),(b),(c),0)
 
 static inline void
-addBufferInt(FBTableBuf *buf, int index, int32 value)
+__addBufferInt(FBTableBuf *buf, int index, int32 value, int32 __default)
 {
-	if (value != 0)
+	if (value != __default)
 		__addBufferScalar(buf, index, &value, sizeof(value), ALIGNOF_INT);
 }
+#define addBufferInt(a,b,c)			__addBufferInt((a),(b),(c),0)
 
 static inline void
-addBufferLong(FBTableBuf *buf, int index, int64 value)
+__addBufferLong(FBTableBuf *buf, int index, int64 value, int64 __default)
 {
-	if (value != 0)
+	if (value != __default)
 		__addBufferScalar(buf, index, &value, sizeof(value), ALIGNOF_LONG);
 }
+#define addBufferLong(a,b,c)		__addBufferLong((a),(b),(c),0)
 
 static inline void
 addBufferString(FBTableBuf *buf, int index, const char *cstring)
@@ -297,8 +302,7 @@ createArrowTypeDate(ArrowTypeDate *node)
 	FBTableBuf *buf = allocFBTableBuf(1);
 
 	assert(node->tag == ArrowNodeTag__Date);
-	if (node->unit != ArrowDateUnit__MilliSecond)
-		__addBufferScalar(buf, 0, &node->unit, sizeof(int16), ALIGNOF_SHORT);
+	__addBufferShort(buf, 0, node->unit, ArrowDateUnit__MilliSecond);
 
 	return makeBufferFlatten(buf);
 }
@@ -309,8 +313,8 @@ createArrowTypeTime(ArrowTypeTime *node)
 	FBTableBuf *buf = allocFBTableBuf(2);
 
 	assert(node->tag == ArrowNodeTag__Time);
-	addBufferShort(buf, 0, node->unit);
-	addBufferInt(buf, 1, node->bitWidth);
+	__addBufferShort(buf, 0, node->unit, ArrowTimeUnit__MilliSecond);
+	__addBufferInt(buf, 1, node->bitWidth, 32);
 
 	return makeBufferFlatten(buf);
 }
@@ -322,8 +326,7 @@ createArrowTypeTimestamp(ArrowTypeTimestamp *node)
 
 	assert(node->tag == ArrowNodeTag__Timestamp);
 	addBufferShort(buf, 0, node->unit);
-	if (node->timezone)
-		addBufferString(buf, 1, node->timezone);
+	addBufferString(buf, 1, node->timezone);
 
 	return makeBufferFlatten(buf);
 }
